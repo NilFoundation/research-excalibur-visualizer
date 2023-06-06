@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.5)
 
+message (STATUS "PKG_CONFIG_PATH=$ENV{PKG_CONFIG_PATH}")
+
 # get header files; only needed by CMake generators,
 # expr.g., for creating proper Xcode projects
 set(${CMAKE_PROJECT_NAME}_HEADERS)
