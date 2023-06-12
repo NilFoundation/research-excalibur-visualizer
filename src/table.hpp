@@ -1,7 +1,30 @@
+// MIT License
+//
+// Copyright (c) 2023 Dmitrii Tabalin <d.tabalin@nil.foundation>
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
 #pragma once
 
 #include <iostream>
 #include <cstring>
+#include <sstream>
 
 #include <boost/spirit/include/qi.hpp>
 #include <boost/spirit/include/phoenix_core.hpp>
@@ -20,9 +43,10 @@
 #include <gtkmm/filedialog.h>
 #include <gtkmm/listitemfactory.h>
 #include <gtkmm/listitem.h>
-#include <gtkmm/label.h>
+#include <gtkmm/textview.h>
 #include <gtkmm/signallistitemfactory.h>
-#include <gtkmm/singleselection.h>
+#include <gtkmm/noselection.h>
+#include <gtkmm/styleprovider.h>
 
 struct TableSizes {
     uint32_t witnesses_size;
@@ -76,19 +100,32 @@ public:
     using value_type = typename BlueprintFieldType::value_type;
     using integral_type = typename BlueprintFieldType::integral_type;
 
-    static Glib::RefPtr<RowObject> create(const std::vector<integral_type>& value_) {
-        return Glib::make_refptr_for_instance<RowObject>(new RowObject(value_));
+    static Glib::RefPtr<RowObject> create(const std::vector<integral_type>& row_, std::size_t row_index_) {
+        return Glib::make_refptr_for_instance<RowObject>(new RowObject(row_, row_index_));
     }
 
-    value_type get_value() const {
-        return value;
+    std::string to_string(std::size_t index) const {
+        std::stringstream ss;
+        ss << std::hex << row[index].data;
+        return ss.str();
+    }
+
+    std::string to_string_decimal(std::size_t index) const {
+        std::stringstream ss;
+        ss << std::dec << row[index].data;
+        return ss.str();
+    }
+
+    std::size_t get_row_index() const {
+        return row_index;
     }
 protected:
-    RowObject(const std::vector<integral_type>& value_) {
-        std::copy(value_.begin(), value_.end(), std::back_inserter(value));
+    RowObject(const std::vector<integral_type>& row_, std::size_t row_index_) : row_index(row_index_) {
+        std::copy(row_.begin(), row_.end(), std::back_inserter(row));
     }
 private:
-    std::vector<value_type> value;
+    std::vector<value_type> row;
+    std::size_t row_index;
 };
 
 template<typename BlueprintFieldType>
@@ -98,15 +135,17 @@ public:
     using value_type = typename BlueprintFieldType::value_type;
 
     ExcaliburWindow() : table(), element_entry(), vbox_prime(), table_window(), vbox_controls(),
-                        open_button("Open"), save_button("Save") {
+                        open_button("Open"), save_button("Save"), cur_row(-1), cur_column(-1) {
         set_title("Excalibur Circuit Viewer: pull the bugs from the stone");
         set_resizable(true);
 
         auto css_provider = Gtk::CssProvider::create();
-        Glib::ustring css_style = "* { font: 24px Arial; }";
+        Glib::ustring css_style =
+            "* { font: 24px Arial; }"
+            "textview.selected { background-color: blue; }";
         css_provider->load_from_data(css_style);
-        auto context = get_style_context();
-        context->add_provider(css_provider, GTK_STYLE_PROVIDER_PRIORITY_USER);
+        Gtk::StyleProvider::add_provider_for_display(
+            Gdk::Display::get_default(), css_provider, GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
 
         element_entry.set_placeholder_text("00000000000000000000000000000000000000000000000000000000000000");
         element_entry.set_max_length(64);
@@ -198,19 +237,58 @@ public:
         boost::spirit::qi::rule<Iterator, std::vector<integral_type>, boost::spirit::qi::ascii::space_type> start;
     };
 
-    void on_setup_column_item(std::size_t column, const Glib::RefPtr<Gtk::ListItem>& list_item) {
-        auto label = Gtk::make_managed<Gtk::Label>();
-        label->set_size_request(10, 10);
-        label->set_text("PL");
-        list_item->set_child(*label);
+    void on_setup_column_item(const Glib::RefPtr<Gtk::ListItem> &list_item) {
+        auto buffer = Gtk::TextBuffer::create();
+        auto text_view = Gtk::make_managed<Gtk::TextView>(buffer);
+        text_view->set_size_request(-1, 32);
+        text_view->set_editable(false);
+        text_view->set_cursor_visible(true);
+        buffer->set_text("Pl");
+
+        list_item->set_child(*text_view);
     }
 
-    void on_bind_column_item(std::size_t column, const Glib::RefPtr<Gtk::ListItem>& list_item) {
-        auto label = dynamic_cast<Gtk::Label*>(list_item->get_child());
-        if (label) {
+    void on_bind_column_item(std::size_t column, const Glib::RefPtr<Gtk::ListItem> &list_item) {
+        auto text_view = dynamic_cast<Gtk::TextView*>(list_item->get_child());
+        if (!text_view) {
+            return;
+        }
+        auto item = list_item->get_item();
+        auto mitem = std::dynamic_pointer_cast<RowObject<BlueprintFieldType>>(item);
+        if (!mitem) {
+            return;
+        }
+        auto buffer = text_view->get_buffer();
+        if (column == 0) {
+            buffer->set_text(mitem->to_string_decimal(column));
+            return;
+        }
+        buffer->set_text(mitem->to_string(column));
+        // We use this instead of signal_mark_set, as it seems to be called less times.
+        // This gets called on click.
+        buffer->signal_mark_deleted().connect(
+            sigc::bind<0>(sigc::bind<0>(sigc::bind<0>(
+                sigc::mem_fun(*this, &ExcaliburWindow::on_mark_deleted),
+                                                      mitem->get_row_index()),
+                                        column),
+                          list_item));
+    }
+
+    void on_mark_deleted(std::size_t row, std::size_t column,
+                         const Glib::RefPtr<Gtk::ListItem> &list_item,
+                         const Glib::RefPtr<Gtk::TextBuffer::Mark> &mark) {
+        if (cur_row == row && cur_column == column) {
+            return;
+        }
+        auto text_view = dynamic_cast<Gtk::TextView*>(list_item->get_child());
+        if (text_view) {
             auto item = list_item->get_item();
             if (auto mo = std::dynamic_pointer_cast<RowObject<BlueprintFieldType>>(item)) {
-                label->set_text("Placeholder");
+                element_entry.set_text(mo->to_string(column));
+                cur_row = row;
+                cur_column = column;
+
+                text_view->add_css_class("selected");
             }
         }
     }
@@ -266,13 +344,15 @@ public:
 
             auto line_begin = line.begin();
             std::vector<integral_type> row;
+            row.push_back(i);
             r = phrase_parse(line_begin, line.end(), row_parser, boost::spirit::ascii::space, row);
             if (!r || line_begin != line.end()) {
                 std::cerr << "Failed to parse line " << i + 1 << " of the file" << std::endl;
                 delete[] buffer;
                 return;
             }
-            store->append(RowObject<BlueprintFieldType>::create(row));
+            //row.insert(row.begin(), i);
+            store->append(RowObject<BlueprintFieldType>::create(row, i));
         }
         std::cout << "Successfully parsed the file" << std::endl;
         delete[] buffer;
@@ -283,28 +363,37 @@ public:
                                   sizes.constants_size + sizes.selectors_size;
 
         auto get_column_name = [](const TableSizes &sizes, std::size_t i) {
-            if (i < sizes.witnesses_size) {
-                return "W" + std::to_string(i);
-            } else if (i < sizes.witnesses_size + sizes.public_inputs_size) {
-                return "P" + std::to_string(i - sizes.witnesses_size);
-            } else if (i < sizes.witnesses_size + sizes.public_inputs_size + sizes.constants_size) {
-                return "C" + std::to_string(i - sizes.witnesses_size - sizes.public_inputs_size);
-            } else {
-                return "S" + std::to_string(i - sizes.witnesses_size - sizes.public_inputs_size
-                                              - sizes.constants_size);
+            if (i == 0) {
+                return std::string("Row");
             }
+            std::stringstream ss;
+            auto fixed_width_size = [&ss](std::size_t j) {
+                ss << std::setfill('0') << std::setw(4) << j;
+                return ss.str();
+            };
+
+            if (i < sizes.witnesses_size + 1) {
+                return "W" + fixed_width_size(i);
+            } else if (i < sizes.witnesses_size + sizes.public_inputs_size + 1) {
+                return "P" + fixed_width_size(i - sizes.witnesses_size - 1);
+            } else if (i < sizes.witnesses_size + sizes.public_inputs_size + sizes.constants_size + 1) {
+                return "C" + fixed_width_size(i - sizes.witnesses_size - sizes.public_inputs_size - 1);
+            } else {
+                return "S" + fixed_width_size(i - sizes.witnesses_size - sizes.public_inputs_size
+                                                - sizes.constants_size - 1);
+            }
+
         };
-        for (std::size_t i = 0; i < column_size; i++) {
+        for (std::size_t i = 0; i < column_size + 1; i++) {
             auto factory = Gtk::SignalListItemFactory::create();
-            factory->signal_setup().connect(
-                sigc::bind<0>(sigc::mem_fun(*this, &ExcaliburWindow::on_setup_column_item), i));
-            //factory->signal_bind().connect(
-            //    sigc::bind<0>(sigc::mem_fun(*this, &ExcaliburWindow::on_bind_column_item)), i);
+            factory->signal_setup().connect(sigc::mem_fun(*this, &ExcaliburWindow::on_setup_column_item));
+            factory->signal_bind().connect(
+                sigc::bind<0>(sigc::mem_fun(*this, &ExcaliburWindow::on_bind_column_item), i));
 
             table.append_column(Gtk::ColumnViewColumn::create(get_column_name(sizes, i), factory));
         }
 
-        auto model = Gtk::SingleSelection::create(store);
+        auto model = Gtk::NoSelection::create(store);
         table.set_model(model);
     }
 
@@ -314,4 +403,6 @@ protected:
     Gtk::ScrolledWindow table_window;
     Gtk::ColumnView table;
     Gtk::Button open_button, save_button;
+private:
+    std::size_t cur_row, cur_column;
 };
