@@ -133,6 +133,10 @@ public:
         return row_index;
     }
 
+    const value_type get_row_item(std::size_t column_index) const {
+        return row[column_index];
+    }
+
     Gtk::TextView* get_row_text_view(std::size_t column_index) const {
         return row_text_views[column_index];
     }
@@ -203,6 +207,8 @@ public:
 
         open_button.signal_clicked().connect(
             sigc::bind(sigc::mem_fun(*this, &ExcaliburWindow::on_action_table_file_open)));
+        save_button.signal_clicked().connect(
+            sigc::bind(sigc::mem_fun(*this, &ExcaliburWindow::on_action_table_file_save)));
     }
 
     ~ExcaliburWindow() override {};
@@ -213,7 +219,17 @@ public:
         file_dialog->set_title("Open table file");
         file_dialog->open(*this,
             sigc::bind<0>(sigc::mem_fun(*this,
-                                        &ExcaliburWindow::on_table_file_dialog_response),
+                                        &ExcaliburWindow::on_table_file_open_dialog_response),
+                          file_dialog));
+    }
+
+    void on_action_table_file_save() {
+        auto file_dialog = Gtk::FileDialog::create();
+        file_dialog->set_modal(true);
+        file_dialog->set_title("Save table file");
+        file_dialog->save(*this,
+            sigc::bind<0>(sigc::mem_fun(*this,
+                                        &ExcaliburWindow::on_table_file_save_dialog_response),
                           file_dialog));
     }
 
@@ -307,8 +323,8 @@ public:
                           mitem));
     }
 
-    void on_table_file_dialog_response(Glib::RefPtr<Gtk::FileDialog> file_dialog,
-                                       std::shared_ptr<Gio::AsyncResult> &res) {
+    void on_table_file_open_dialog_response(Glib::RefPtr<Gtk::FileDialog> file_dialog,
+                                            std::shared_ptr<Gio::AsyncResult> &res) {
         auto result = file_dialog->open_finish(res);
         auto stream = result->read();
         auto file_info = result->query_info();
@@ -328,7 +344,6 @@ public:
             return;
         }
 
-        TableSizes sizes;
         SizesParser<decltype(first_line.begin())> sizes_parser;
         auto first_line_begin = first_line.begin();
 
@@ -414,6 +429,68 @@ public:
         table.set_model(model);
     }
 
+    void on_table_file_save_dialog_response(Glib::RefPtr<Gtk::FileDialog> file_dialog,
+                                            std::shared_ptr<Gio::AsyncResult> &res) {
+        auto result = file_dialog->save_finish(res);
+        auto stream = result->replace();
+        if (stream->is_closed()) {
+            std::cerr << "Failed to open the file for writing" << std::endl;
+            return;
+        }
+        // Write the header
+        std::stringstream header;
+        header << "witnesses_size: " << sizes.witnesses_size << " public_inputs_size: " << sizes.public_inputs_size
+               << " constants_size: " << sizes.constants_size << " selectors_size: " << sizes.selectors_size
+               << " max_size: " << sizes.max_size << "\n";
+        stream->write(header.str().c_str(), header.str().size());
+        auto model = dynamic_cast<Gtk::NoSelection*>(&*table.get_model());
+        if (!model) {
+            std::cout << "No model" << std::endl;
+            stream->close();
+            return;
+        }
+        auto list_model = model->get_model();
+        std::uint32_t width = (BlueprintFieldType::modulus_bits + 4 - 1) / 4;
+        std::size_t hex_sizes = sizes.witnesses_size + sizes.public_inputs_size + sizes.constants_size;
+        for (std::size_t i = 0; i < sizes.max_size; i++) {
+            std::stringstream row_stream;
+            row_stream << std::hex << std::setfill('0');
+            auto object_row = model->get_object(i);
+            if (!object_row) {
+                std::cout << "No object" << std::endl;
+                stream->close();
+                return;
+            }
+            auto row = dynamic_cast<RowObject<BlueprintFieldType>*>(&*object_row);
+            if (!row) {
+                std::cout << "No row" << std::endl;
+                stream->close();
+                return;
+            }
+            std::size_t curr_idx = 1;
+            for (std::size_t j = 0; j < sizes.witnesses_size; j++) {
+                row_stream << std::setw(width) << row->get_row_item(curr_idx++).data << " ";
+            }
+            row_stream << "| ";
+            for (std::size_t j = 0; j < sizes.public_inputs_size; j++) {
+                row_stream << std::setw(width) << row->get_row_item(curr_idx++).data << " ";
+            }
+            row_stream << "| ";
+            for (std::size_t j = 0; j < sizes.constants_size; j++) {
+                row_stream << std::setw(width)
+                           << row->get_row_item(curr_idx++).data
+                           << " ";
+            }
+            row_stream << "| ";
+            for (std::size_t j = 0; j < sizes.selectors_size - 1; j++) {
+                row_stream << row->get_row_item(curr_idx++).data << " ";
+            }
+            row_stream << row->get_row_item(curr_idx).data << "\n";
+            stream->write(row_stream.str().c_str(), row_stream.str().size());
+        }
+        stream->close();
+    }
+
     void clear_highlights() {
         for (auto &item : highlighted_items) {
             for (auto &class_name : item->get_css_classes()) {
@@ -476,6 +553,7 @@ public:
             return;
         }
         row->set_row_item(value, cur_column);
+        // Update the text view
         auto text_view = row->get_row_text_view(cur_column);
         auto buffer = text_view->get_buffer();
         buffer->set_text(row->to_string(cur_column));
@@ -491,4 +569,5 @@ protected:
 private:
     std::vector<Gtk::TextView*> highlighted_items;
     std::size_t cur_row, cur_column;
+    TableSizes sizes;
 };
