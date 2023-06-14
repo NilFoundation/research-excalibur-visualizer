@@ -25,7 +25,10 @@ pkgs.mkShell {
     libdatrie
     libdeflate
     wrapGAppsHook4
-
+    gdb
+    valgrind
+    libsForQt5.kcachegrind
+    linuxKernel.packages.linux_zen.perf
     clang-tools_16
   ] ++ (with pkgs.llvmPackages_16; [
     clang

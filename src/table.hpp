@@ -22,13 +22,12 @@
 
 #pragma once
 
-#include "glibmm/value.h"
-#include "gtkmm/enums.h"
-#include "pangomm/layout.h"
 #include <iostream>
 #include <iomanip>
 #include <cstring>
 #include <sstream>
+#include <vector>
+#include <map>
 
 #include <boost/spirit/include/qi.hpp>
 #include <boost/spirit/include/phoenix_core.hpp>
@@ -37,8 +36,13 @@
 
 #include <giomm/liststore.h>
 
+#include <glibmm/value.h>
+
+#include <pangomm/layout.h>
+
 #include <glibmm/property.h>
 
+#include <gtkmm/enums.h>
 #include <gtkmm/label.h>
 #include <gtkmm/columnview.h>
 #include <gtkmm/columnviewcolumn.h>
@@ -56,7 +60,6 @@
 #include <gtkmm/noselection.h>
 #include <gtkmm/styleprovider.h>
 #include <gtkmm/eventcontrollerkey.h>
-#include <vector>
 
 struct TableSizes {
     uint32_t witnesses_size;
@@ -128,15 +131,7 @@ public:
     }
 
     std::string to_string(std::size_t index) const {
-        std::stringstream ss;
-        ss << std::hex << row[index].data;
-        return ss.str();
-    }
-
-    std::string to_string_decimal(std::size_t index) const {
-        std::stringstream ss;
-        ss << std::dec << row[index].data;
-        return ss.str();
+        return string_cache[index];
     }
 
     std::size_t get_row_index() const {
@@ -149,16 +144,60 @@ public:
 
     void set_row_item(const value_type& v, std::size_t column_index) {
         row[column_index] = v;
+
+        std::stringstream ss;
+        if (column_index != 0) {
+            ss << std::hex;
+        } else {
+            ss << std::dec;
+        }
+        ss << row[column_index].data;
+        string_cache[column_index] = ss.str();
     }
 
 protected:
     RowObject(const std::vector<integral_type>& row_, std::size_t row_index_) : row_index(row_index_) {
+        row.reserve(row_.size());
         std::copy(row_.begin(), row_.end(), std::back_inserter(row));
+        string_cache.reserve(row.size());
+
+        for (std::size_t i = 0; i < row.size(); ++i) {
+            std::stringstream ss;
+            if (i != 0) {
+                ss << std::hex;
+            } else {
+                ss << std::dec;
+            }
+            ss << row[i].data;
+            string_cache.push_back(ss.str());
+        }
     }
 private:
+    std::vector<std::string> string_cache;
     std::vector<value_type> row;
     std::size_t row_index;
 };
+
+template<typename WidgetType>
+struct WidgetStatusTracker {
+    // Sometimes, a widget gets loaded/unloaded, and we need to track all the modifiers for it.
+    // Examples include if it should be highlighted or not.
+    // This class stores the pointer status: invalidated on unbind, and valid on bind.
+    WidgetStatusTracker() : widget(nullptr), is_alive(false) {}
+    WidgetStatusTracker(WidgetType* widget_) : widget(widget_), is_alive(true) {}
+
+    WidgetType* widget;
+    bool is_alive;
+};
+
+template<typename WidgetType>
+struct WidgetTracker : public WidgetStatusTracker<WidgetType> {
+    // Additionally to WidgetStatusTracker duties handles the row/column tracking
+    WidgetTracker() : WidgetStatusTracker<WidgetType>(), row(-1), column(-1) {}
+
+    std::size_t row, column;
+};
+
 
 template<typename BlueprintFieldType>
 class ExcaliburWindow : public Gtk::ApplicationWindow {
@@ -167,13 +206,13 @@ public:
     using value_type = typename BlueprintFieldType::value_type;
 
     ExcaliburWindow() : table(), element_entry(), vbox_prime(), table_window(), vbox_controls(),
-                        open_button("Open"), save_button("Save"), cur_row(-1), cur_column(-1) {
+                        open_button("Open"), save_button("Save") {
         set_title("Excalibur Circuit Viewer: pull the bugs from the stone");
         set_resizable(true);
 
         auto css_provider = Gtk::CssProvider::create();
         Glib::ustring css_style =
-            "* { font: 24px Arial; }"
+            "* { font: 24px Arial; border-radius: unset }"
             "button.selected { background: deepskyblue; }";
         css_provider->load_from_data(css_style);
         Gtk::StyleProvider::add_provider_for_display(
@@ -286,41 +325,64 @@ public:
         boost::spirit::qi::rule<Iterator, std::vector<integral_type>, boost::spirit::qi::ascii::space_type> start;
     };
 
-    void on_setup_column_item(const Glib::RefPtr<Gtk::ListItem> &list_item) {
+    void on_setup_column_item(std::size_t column, const Glib::RefPtr<Gtk::ListItem> &list_item) {
         auto button = Gtk::make_managed<Gtk::Button>();
         auto label = Gtk::make_managed<Gtk::Label>();
 
         label->set_ellipsize(Pango::EllipsizeMode::START);
         label->set_halign(Gtk::Align::END);
-        label->set_text("Pl");
+        label->set_text("");
         button->set_child(*label);
         list_item->set_child(*button);
+
+        button->signal_clicked().connect(
+            sigc::bind<0>(sigc::bind<0>(
+                sigc::mem_fun(*this, &ExcaliburWindow::on_cell_clicked),
+                                        column),
+                          list_item));
     }
 
     void on_bind_column_item(std::size_t column, const Glib::RefPtr<Gtk::ListItem> &list_item) {
         auto button = dynamic_cast<Gtk::Button*>(list_item->get_child());
+        if (!button) {
+            return;
+        }
         auto label = dynamic_cast<Gtk::Label*>(button->get_child());
         if (!label) {
             return;
         }
 
         auto item = list_item->get_item();
-        auto mitem = std::dynamic_pointer_cast<RowObject<BlueprintFieldType>>(item);
+        auto mitem = dynamic_cast<RowObject<BlueprintFieldType>*>(&*item);
         if (!mitem) {
             return;
         }
-        if (column != 0) {
+        if (label->get_text()[0] == '\0') {
             label->set_text(mitem->to_string(column));
-        } else {
-            label->set_text(mitem->to_string_decimal(column));
         }
-        button->signal_clicked().connect(
-            sigc::bind<0>(sigc::bind<0>(sigc::bind<0>(sigc::bind<0>(
-                sigc::mem_fun(*this, &ExcaliburWindow::on_cell_clicked),
-                                                                  mitem->get_row_index()),
-                                                      column),
-                                        button),
-                          mitem));
+
+        std::pair<std::size_t, std::size_t> key = {mitem->get_row_index(), column};
+        if (active_label_tracker.row == key.first && active_label_tracker.column == key.second) {
+            active_label_tracker.widget = label;
+            active_label_tracker.is_alive = true;
+            label->set_text(mitem->to_string(column));
+        }
+    }
+
+    void on_unbind_column_item(std::size_t column, const Glib::RefPtr<Gtk::ListItem> &list_item) {
+        auto item = list_item->get_item();
+        auto mitem = dynamic_cast<RowObject<BlueprintFieldType>*>(&*item);
+        if (!mitem) {
+            return;
+        }
+        std::pair<std::size_t, std::size_t> key = {mitem->get_row_index(), column};
+        if (key.first == active_label_tracker.row && key.second == active_label_tracker.column) {
+            active_label_tracker.is_alive = false;
+        }
+        auto it = highlighted_items.find(key);
+        if (it != highlighted_items.end()) {
+            it->second.is_alive = false;
+        }
     }
 
     void on_table_file_open_dialog_response(Glib::RefPtr<Gtk::FileDialog> file_dialog,
@@ -415,12 +477,14 @@ public:
         };
         for (std::size_t i = 0; i < column_size + 1; i++) {
             auto factory = Gtk::SignalListItemFactory::create();
-            factory->signal_setup().connect(sigc::mem_fun(*this, &ExcaliburWindow::on_setup_column_item));
+            factory->signal_setup().connect(
+                sigc::bind<0>(sigc::mem_fun(*this, &ExcaliburWindow::on_setup_column_item), i));
             factory->signal_bind().connect(
                 sigc::bind<0>(sigc::mem_fun(*this, &ExcaliburWindow::on_bind_column_item), i));
+            factory->signal_unbind().connect(
+                sigc::bind<0>(sigc::mem_fun(*this, &ExcaliburWindow::on_unbind_column_item), i));
 
             auto column = Gtk::ColumnViewColumn::create(get_column_name(sizes, i), factory);
-            // Setting resizeable here doesn't seem to have any effect, but we do this anyway.
             column->set_resizable(true);
             table.append_column(column);
         }
@@ -493,35 +557,42 @@ public:
 
     void clear_highlights() {
         for (auto &item : highlighted_items) {
-            for (auto &class_name : item->get_css_classes()) {
-                if (class_name == "selected") {
-                    item->remove_css_class(class_name);
-                }
+            if (item.second.is_alive) {
+                item.second.widget->remove_css_class("selected");
             }
         }
         highlighted_items.clear();
     }
 
-    void on_cell_clicked(std::size_t row, std::size_t column, Gtk::Button* button,
-                         std::shared_ptr<RowObject<BlueprintFieldType>> item) {
-        if (cur_row == row && cur_column == column || button == nullptr) {
+    void on_cell_clicked(std::size_t column, const Glib::RefPtr<Gtk::ListItem> &list_item) {
+        auto item = list_item->get_item();
+        auto mitem = dynamic_cast<RowObject<BlueprintFieldType>*>(&*item);
+        if (!mitem) {
             return;
         }
-        element_entry.set_text(item->to_string(column));
-        cur_row = row;
-        cur_column = column;
+        std::size_t row = mitem->get_row_index();
+        auto button = dynamic_cast<Gtk::Button*>(&*list_item->get_child());
+
+        if (active_label_tracker.row == row && active_label_tracker.column == column || button == nullptr) {
+            return;
+        }
+
+        element_entry.set_text(mitem->to_string(column));
+        active_label_tracker.row = row;
+        active_label_tracker.column = column;
 
         clear_highlights();
         button->add_css_class("selected");
-        highlighted_items.push_back(button);
-        active_label = dynamic_cast<Gtk::Label*>(&*button->get_child());
+        highlighted_items[std::make_pair(row, column)] = WidgetStatusTracker(button);
+        active_label_tracker.widget = dynamic_cast<Gtk::Label*>(&*button->get_child());
+        active_label_tracker.is_alive = true;
     }
 
     void on_entry_key_released(guint keyval, guint keycode, Gdk::ModifierType state) {
-        if (cur_row == -1 || cur_column == -1 || keyval != 65293) { // Didn't select any cell or keyval != enter
+        // Didn't select any cell or keyval != enter
+        if (active_label_tracker.row == -1 || active_label_tracker.column == -1 || keyval != 65293) {
             return;
         }
-        std::cout << "Enter pressed" << std::endl;
         std::stringstream ss;
         ss << std::hex << element_entry.get_text();
         integral_type integral_value;
@@ -537,7 +608,7 @@ public:
             std::cout << "No model" << std::endl;
             return;
         }
-        auto object_row = model->get_object(cur_row);
+        auto object_row = model->get_object(active_label_tracker.row);
         if (!object_row) {
             std::cout << "No object" << std::endl;
             return;
@@ -547,8 +618,10 @@ public:
             std::cout << "Failed cast to row" << std::endl;
             return;
         }
-        row->set_row_item(value, cur_column);
-        active_label->set_text(row->to_string(cur_column));
+        row->set_row_item(value, active_label_tracker.column);
+        if (active_label_tracker.is_alive) {
+            active_label_tracker.widget->set_text(row->to_string(active_label_tracker.column));
+        }
     }
 
 protected:
@@ -558,8 +631,8 @@ protected:
     Gtk::ColumnView table;
     Gtk::Button open_button, save_button;
 private:
-    std::vector<Gtk::Button*> highlighted_items;
-    std::size_t cur_row, cur_column;
-    Gtk::Label* active_label;
+    std::map<std::pair<std::size_t, std::size_t>, WidgetStatusTracker<Gtk::Button>> highlighted_items;
+
+    WidgetTracker<Gtk::Label> active_label_tracker;
     TableSizes sizes;
 };

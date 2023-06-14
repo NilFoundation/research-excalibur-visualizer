@@ -10,6 +10,11 @@ set(${CMAKE_PROJECT_NAME}_HEADERS)
 
 set(C3_TARGET "excalibur")
 
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    add_compile_options(-pg)
+    link_libraries(-pg)
+endif()
+
 # list cpp files excluding platform-dependent files
 list(APPEND ${CMAKE_PROJECT_NAME}_SOURCES main.cpp)
 
