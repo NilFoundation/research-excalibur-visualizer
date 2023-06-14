@@ -130,7 +130,7 @@ public:
         return Glib::make_refptr_for_instance<RowObject>(new RowObject(row_, row_index_));
     }
 
-    std::string to_string(std::size_t index) const {
+    const Glib::ustring& to_string(std::size_t index) const {
         return string_cache[index];
     }
 
@@ -173,7 +173,7 @@ protected:
         }
     }
 private:
-    std::vector<std::string> string_cache;
+    std::vector<Glib::ustring> string_cache;
     std::vector<value_type> row;
     std::size_t row_index;
 };
@@ -212,7 +212,7 @@ public:
 
         auto css_provider = Gtk::CssProvider::create();
         Glib::ustring css_style =
-            "* { font: 24px Arial; border-radius: unset }"
+            "* { font: 24px Courier; border-radius: unset }"
             "button.selected { background: deepskyblue; }";
         css_provider->load_from_data(css_style);
         Gtk::StyleProvider::add_provider_for_display(
@@ -331,10 +331,12 @@ public:
 
         label->set_ellipsize(Pango::EllipsizeMode::START);
         label->set_halign(Gtk::Align::END);
-        label->set_text("");
         button->set_child(*label);
         list_item->set_child(*button);
 
+        if (column == 0) {
+            return;
+        }
         button->signal_clicked().connect(
             sigc::bind<0>(sigc::bind<0>(
                 sigc::mem_fun(*this, &ExcaliburWindow::on_cell_clicked),
@@ -357,15 +359,12 @@ public:
         if (!mitem) {
             return;
         }
-        if (label->get_text()[0] == '\0') {
-            label->set_text(mitem->to_string(column));
-        }
+        label->set_text(mitem->to_string(column));
 
         std::pair<std::size_t, std::size_t> key = {mitem->get_row_index(), column};
         if (active_label_tracker.row == key.first && active_label_tracker.column == key.second) {
             active_label_tracker.widget = label;
             active_label_tracker.is_alive = true;
-            label->set_text(mitem->to_string(column));
         }
     }
 
@@ -442,7 +441,7 @@ public:
                 delete[] buffer;
                 return;
             }
-            //row.insert(row.begin(), i);
+
             store->append(RowObject<BlueprintFieldType>::create(row, i));
         }
         std::cout << "Successfully parsed the file" << std::endl;
