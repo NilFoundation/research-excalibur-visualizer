@@ -3,30 +3,33 @@ let
   pkgs = import sources.nixpkgs {};
 in
 pkgs.mkShell {
-  buildInputs = [
-    pkgs.niv
-    pkgs.clang
-    pkgs.cmake
-    pkgs.boost
-    pkgs.pkg-config
-    pkgs.gtk4
-    pkgs.gtkmm4
-    pkgs.glibmm
-    pkgs.pcre2
-    pkgs.glib
-    pkgs.pango
-    pkgs.pangomm
-    pkgs.util-linux
-    pkgs.xorg.libXdmcp
-    pkgs.libselinux
-    pkgs.libsepol
-    pkgs.pcre
-    pkgs.fribidi
-    pkgs.libthai
-    pkgs.libdatrie
-    pkgs.libdeflate
-    pkgs.wrapGAppsHook4
-  ];
+  buildInputs = with pkgs; [
+    niv
+    cmake
+    boost
+    pkg-config
+    gtk4
+    gtkmm4
+    glibmm
+    pcre2
+    glib
+    pango
+    pangomm
+    util-linux
+    xorg.libXdmcp
+    libselinux
+    libsepol
+    pcre
+    fribidi
+    libthai
+    libdatrie
+    libdeflate
+    wrapGAppsHook4
+
+    clang-tools_16
+  ] ++ (with pkgs.llvmPackages_16; [
+    clang
+  ]);
 
   shellHook = ''
     export NO_AT_BRIDGE="1"

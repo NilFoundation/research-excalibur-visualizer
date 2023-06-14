@@ -22,7 +22,11 @@
 
 #pragma once
 
+#include "glibmm/value.h"
+#include "gtkmm/enums.h"
+#include "pangomm/layout.h"
 #include <iostream>
+#include <iomanip>
 #include <cstring>
 #include <sstream>
 
@@ -32,6 +36,10 @@
 #include <boost/phoenix/object/construct.hpp>
 
 #include <giomm/liststore.h>
+
+#include <glibmm/property.h>
+
+#include <gtkmm/label.h>
 #include <gtkmm/columnview.h>
 #include <gtkmm/columnviewcolumn.h>
 #include <gtkmm/box.h>
@@ -48,6 +56,7 @@
 #include <gtkmm/noselection.h>
 #include <gtkmm/styleprovider.h>
 #include <gtkmm/eventcontrollerkey.h>
+#include <vector>
 
 struct TableSizes {
     uint32_t witnesses_size;
@@ -110,6 +119,7 @@ void print_widget_hierarchy(Gtk::Widget& widget, int depth = 0) {
 template <typename BlueprintFieldType>
 class RowObject : public Glib::Object {
 public:
+
     using value_type = typename BlueprintFieldType::value_type;
     using integral_type = typename BlueprintFieldType::integral_type;
 
@@ -137,25 +147,16 @@ public:
         return row[column_index];
     }
 
-    Gtk::TextView* get_row_text_view(std::size_t column_index) const {
-        return row_text_views[column_index];
+    void set_row_item(const value_type& v, std::size_t column_index) {
+        row[column_index] = v;
     }
 
-    void set_row_item(const value_type& value, std::size_t column_index) {
-        row[column_index] = value;
-    }
-
-    void set_row_text_view(Gtk::TextView* text_view, std::size_t column_index) {
-        row_text_views[column_index] = text_view;
-    }
 protected:
     RowObject(const std::vector<integral_type>& row_, std::size_t row_index_) : row_index(row_index_) {
         std::copy(row_.begin(), row_.end(), std::back_inserter(row));
-        row_text_views.resize(row.size());
     }
 private:
     std::vector<value_type> row;
-    std::vector<Gtk::TextView*> row_text_views;
     std::size_t row_index;
 };
 
@@ -173,7 +174,7 @@ public:
         auto css_provider = Gtk::CssProvider::create();
         Glib::ustring css_style =
             "* { font: 24px Arial; }"
-            "textview.selected { background-color: deepskyblue; }";
+            "button.selected { background: deepskyblue; }";
         css_provider->load_from_data(css_style);
         Gtk::StyleProvider::add_provider_for_display(
             Gdk::Display::get_default(), css_provider, GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
@@ -268,7 +269,6 @@ public:
             using boost::spirit::qi::uint_;
             using boost::phoenix::val;
             using boost::phoenix::construct;
-            BOOST_STATIC_ASSERT(std::numeric_limits<integral_type>::radix == 2);
 
             auto hex_rule = uint_parser<integral_type, 16, 1, (BlueprintFieldType::modulus_bits + 4 - 1) / 4>();
             start = repeat(sizes.witnesses_size)[hex_rule] > lit('|') >
@@ -287,39 +287,39 @@ public:
     };
 
     void on_setup_column_item(const Glib::RefPtr<Gtk::ListItem> &list_item) {
-        auto buffer = Gtk::TextBuffer::create();
-        auto text_view = Gtk::make_managed<Gtk::TextView>(buffer);
-        text_view->set_size_request(-1, 32);
-        text_view->set_editable(false);
-        text_view->set_cursor_visible(true);
-        buffer->set_text("Pl");
+        auto button = Gtk::make_managed<Gtk::Button>();
+        auto label = Gtk::make_managed<Gtk::Label>();
 
-        list_item->set_child(*text_view);
+        label->set_ellipsize(Pango::EllipsizeMode::START);
+        label->set_halign(Gtk::Align::END);
+        label->set_text("Pl");
+        button->set_child(*label);
+        list_item->set_child(*button);
     }
 
     void on_bind_column_item(std::size_t column, const Glib::RefPtr<Gtk::ListItem> &list_item) {
-        auto text_view = dynamic_cast<Gtk::TextView*>(list_item->get_child());
-        if (!text_view) {
+        auto button = dynamic_cast<Gtk::Button*>(list_item->get_child());
+        auto label = dynamic_cast<Gtk::Label*>(button->get_child());
+        if (!label) {
             return;
         }
+
         auto item = list_item->get_item();
         auto mitem = std::dynamic_pointer_cast<RowObject<BlueprintFieldType>>(item);
         if (!mitem) {
             return;
         }
-        mitem->set_row_text_view(text_view, column);
-        auto buffer = text_view->get_buffer();
-        if (column == 0) {
-            buffer->set_text(mitem->to_string_decimal(column));
-            return;
+        if (column != 0) {
+            label->set_text(mitem->to_string(column));
+        } else {
+            label->set_text(mitem->to_string_decimal(column));
         }
-        buffer->set_text(mitem->to_string(column));
-        text_view->signal_state_flags_changed().connect(
+        button->signal_clicked().connect(
             sigc::bind<0>(sigc::bind<0>(sigc::bind<0>(sigc::bind<0>(
-                sigc::mem_fun(*this, &ExcaliburWindow::on_text_view_signal_state_flags_changed),
+                sigc::mem_fun(*this, &ExcaliburWindow::on_cell_clicked),
                                                                   mitem->get_row_index()),
                                                       column),
-                                        text_view),
+                                        button),
                           mitem));
     }
 
@@ -502,24 +502,19 @@ public:
         highlighted_items.clear();
     }
 
-    void on_text_view_signal_state_flags_changed(std::size_t row, std::size_t column, Gtk::TextView* view,
-                                                 std::shared_ptr<RowObject<BlueprintFieldType>> item,
-                                                 Gtk::StateFlags previous_state_flags) {
-        auto state_flags = view->get_state_flags();
-        Gtk::StateFlags focused_flag = Gtk::StateFlags::FOCUSED;
-        if ( ((state_flags & focused_flag) == focused_flag) &&
-             ((previous_state_flags & focused_flag) != focused_flag)) {
-            if (cur_row == row && cur_column == column || view == nullptr) {
-                return;
-            }
-            element_entry.set_text(item->to_string(column));
-            cur_row = row;
-            cur_column = column;
-
-            clear_highlights();
-            view->add_css_class("selected");
-            highlighted_items.push_back(view);
+    void on_cell_clicked(std::size_t row, std::size_t column, Gtk::Button* button,
+                         std::shared_ptr<RowObject<BlueprintFieldType>> item) {
+        if (cur_row == row && cur_column == column || button == nullptr) {
+            return;
         }
+        element_entry.set_text(item->to_string(column));
+        cur_row = row;
+        cur_column = column;
+
+        clear_highlights();
+        button->add_css_class("selected");
+        highlighted_items.push_back(button);
+        active_label = dynamic_cast<Gtk::Label*>(&*button->get_child());
     }
 
     void on_entry_key_released(guint keyval, guint keycode, Gdk::ModifierType state) {
@@ -553,11 +548,7 @@ public:
             return;
         }
         row->set_row_item(value, cur_column);
-        // Update the text view
-        auto text_view = row->get_row_text_view(cur_column);
-        auto buffer = text_view->get_buffer();
-        buffer->set_text(row->to_string(cur_column));
-        element_entry.set_text(row->to_string(cur_column));
+        active_label->set_text(row->to_string(cur_column));
     }
 
 protected:
@@ -567,7 +558,8 @@ protected:
     Gtk::ColumnView table;
     Gtk::Button open_button, save_button;
 private:
-    std::vector<Gtk::TextView*> highlighted_items;
+    std::vector<Gtk::Button*> highlighted_items;
     std::size_t cur_row, cur_column;
+    Gtk::Label* active_label;
     TableSizes sizes;
 };

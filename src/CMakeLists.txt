@@ -1,5 +1,7 @@
 cmake_minimum_required(VERSION 3.5)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS true)
+
 message (STATUS "PKG_CONFIG_PATH=$ENV{PKG_CONFIG_PATH}")
 
 # get header files; only needed by CMake generators,
