@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <iostream>
 #include <iomanip>
 #include <cstring>
@@ -61,12 +62,16 @@
 #include <gtkmm/styleprovider.h>
 #include <gtkmm/eventcontrollerkey.h>
 
+#include <nil/crypto3/zk/snark/arithmetization/plonk/gate.hpp>
+#include <nil/crypto3/zk/snark/arithmetization/plonk/copy_constraint.hpp>
+#include <nil/crypto3/zk/snark/arithmetization/plonk/constraint.hpp>
+
 struct TableSizes {
-    uint32_t witnesses_size;
-    uint32_t public_inputs_size;
-    uint32_t constants_size;
-    uint32_t selectors_size;
-    uint32_t max_size;
+    uint32_t witnesses_size,
+             public_inputs_size,
+             constants_size,
+             selectors_size,
+             max_size;
 };
 
 BOOST_FUSION_ADAPT_STRUCT(
@@ -77,6 +82,31 @@ BOOST_FUSION_ADAPT_STRUCT(
     (uint32_t, selectors_size)
     (uint32_t, max_size)
 )
+
+struct CircuitSizes {
+    uint32_t gates_size,
+             copy_constraints_size,
+             lookup_gates_size;
+};
+
+BOOST_FUSION_ADAPT_STRUCT(
+    CircuitSizes,
+    (uint32_t, gates_size)
+    (uint32_t, copy_constraints_size)
+    (uint32_t, lookup_gates_size)
+)
+
+template<typename BlueprintFieldType>
+struct CircuitContainer {
+    using plonk_constraint_type = nil::crypto3::zk::snark::plonk_constraint<BlueprintFieldType>;
+    using gate_type = nil::crypto3::zk::snark::plonk_gate<BlueprintFieldType, plonk_constraint_type>;
+    using plonk_copy_constraint_type = nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>;
+
+    CircuitSizes sizes;
+    std::map<std::size_t, gate_type> gates;
+    std::vector<plonk_copy_constraint_type> copy_constraints;
+    // Todo: add lookup gates
+};
 
 std::string read_line_from_gstream(Glib::RefPtr<Gio::FileInputStream> stream,
                                    gsize predicted_line_size,
@@ -108,16 +138,48 @@ std::string read_line_from_gstream(Glib::RefPtr<Gio::FileInputStream> stream,
 }
 
 // Use this to debug in case you have no idea where a widget is
-void print_widget_hierarchy(Gtk::Widget& widget, int depth = 0) {
+void print_widget_hierarchy(const Gtk::Widget& widget, int depth = 0) {
     std::string indent(depth * 2, ' '); // Indentation based on depth
     std::cout << indent << widget.get_name() << std::endl;
 
-    Gtk::Widget* child = widget.get_first_child();
+    const Gtk::Widget* child = widget.get_first_child();
     while(child != nullptr) {
         print_widget_hierarchy(*child, depth + 1);
         child = child->get_next_sibling();
     }
 }
+
+
+void print_list_item_hierarchy(const Gtk::ListItem &list_item) {
+    const Gtk::Widget* child = list_item.get_child();
+    while(child != nullptr) {
+        print_widget_hierarchy(*child, 1);
+        child = child->get_next_sibling();
+    }
+}
+
+struct CellState {
+    CellState() : state(CellStateFlags::NORMAL) {}
+    CellState(uint8_t state_) : state(state_) {}
+    enum CellStateFlags : uint8_t {
+        NORMAL = 0,
+        SELECTED = 1 << 1
+    };
+
+    void select() {
+        state |= SELECTED;
+    }
+
+    void unselect() {
+        state &= ~SELECTED;
+    }
+
+    bool is_selected() const {
+        return state & SELECTED;
+    }
+
+    uint8_t state;
+};
 
 template <typename BlueprintFieldType>
 class RowObject : public Glib::Object {
@@ -155,8 +217,38 @@ public:
         string_cache[column_index] = ss.str();
     }
 
+    void set_cell_state(std::size_t column_index, CellState state) {
+        cell_states[column_index] = state;
+    }
+
+    CellState get_cell_state(std::size_t column_index) const {
+        return cell_states[column_index];
+    }
+
+    CellState& get_cell_state(std::size_t column_index) {
+        return cell_states[column_index];
+    }
+
+    void set_widget(std::size_t column_index, Gtk::Button* widget) {
+        widgets[column_index] = widget;
+    }
+
+    Gtk::Button* get_widget(std::size_t column_index) const {
+        return widgets[column_index];
+    }
+
+    bool get_widget_loaded(std::size_t column_index) const {
+        return widget_loaded[column_index];
+    }
+
+    void set_widget_loaded(std::size_t column_index, bool loaded) {
+        widget_loaded[column_index] = loaded;
+    }
+
 protected:
-    RowObject(const std::vector<integral_type>& row_, std::size_t row_index_) : row_index(row_index_) {
+    RowObject(const std::vector<integral_type>& row_, std::size_t row_index_) :
+            row_index(row_index_), cell_states(row_.size(), CellState::CellStateFlags::NORMAL),
+            widgets(row_.size(), nullptr), widget_loaded(row_.size(), false) {
         row.reserve(row_.size());
         std::copy(row_.begin(), row_.end(), std::back_inserter(row));
         string_cache.reserve(row.size());
@@ -176,25 +268,17 @@ private:
     std::vector<Glib::ustring> string_cache;
     std::vector<value_type> row;
     std::size_t row_index;
+    std::vector<CellState> cell_states;
+    // We don't use a WidgetStatusTracker here, because of memory gains when storing bools.
+    std::vector<Gtk::Button*> widgets;
+    std::vector<bool> widget_loaded;
 };
 
-template<typename WidgetType>
-struct WidgetStatusTracker {
-    // Sometimes, a widget gets loaded/unloaded, and we need to track all the modifiers for it.
-    // Examples include if it should be highlighted or not.
-    // This class stores the pointer status: invalidated on unbind, and valid on bind.
-    WidgetStatusTracker() : widget(nullptr), is_alive(false) {}
-    WidgetStatusTracker(WidgetType* widget_) : widget(widget_), is_alive(true) {}
+template<typename WidgetType, typename BlueprintFieldType>
+struct CellTracker {
+    CellTracker() : row(-1), column(-1), row_object(nullptr) {}
 
-    WidgetType* widget;
-    bool is_alive;
-};
-
-template<typename WidgetType>
-struct WidgetTracker : public WidgetStatusTracker<WidgetType> {
-    // Additionally to WidgetStatusTracker duties handles the row/column tracking
-    WidgetTracker() : WidgetStatusTracker<WidgetType>(), row(-1), column(-1) {}
-
+    RowObject<BlueprintFieldType>* row_object;
     std::size_t row, column;
 };
 
@@ -206,14 +290,17 @@ public:
     using value_type = typename BlueprintFieldType::value_type;
 
     ExcaliburWindow() : table(), element_entry(), vbox_prime(), table_window(), vbox_controls(),
-                        open_button("Open"), save_button("Save") {
+                        open_table_button("Open Table"), save_table_button("Save"),
+                        open_circuit_button("Open Circuit") {
         set_title("Excalibur Circuit Viewer: pull the bugs from the stone");
         set_resizable(true);
 
         auto css_provider = Gtk::CssProvider::create();
         Glib::ustring css_style =
             "* { font: 24px Courier; border-radius: unset }"
-            "button.selected { background: deepskyblue; }";
+            "button { margin: 0px; padding: 0px; }"
+            "button.selected { background: deepskyblue; }"
+            "button.crimson { background: crimson; }";
         css_provider->load_from_data(css_style);
         Gtk::StyleProvider::add_provider_for_display(
             Gdk::Display::get_default(), css_provider, GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
@@ -226,8 +313,9 @@ public:
 
         vbox_controls.set_spacing(10);
         vbox_controls.set_orientation(Gtk::Orientation::HORIZONTAL);
-        vbox_controls.append(open_button);
-        vbox_controls.append(save_button);
+        vbox_controls.append(open_table_button);
+        vbox_controls.append(save_table_button);
+        vbox_controls.append(open_circuit_button);
         vbox_controls.append(element_entry);
         vbox_prime.append(vbox_controls);
 
@@ -245,10 +333,11 @@ public:
             sigc::mem_fun(*this, &ExcaliburWindow::on_entry_key_released), true);
         element_entry.add_controller(key_controller);
 
-        open_button.signal_clicked().connect(
-            sigc::bind(sigc::mem_fun(*this, &ExcaliburWindow::on_action_table_file_open)));
-        save_button.signal_clicked().connect(
-            sigc::bind(sigc::mem_fun(*this, &ExcaliburWindow::on_action_table_file_save)));
+        open_table_button.signal_clicked().connect(sigc::mem_fun(*this, &ExcaliburWindow::on_action_table_file_open));
+        open_circuit_button.signal_clicked().connect(
+            sigc::mem_fun(*this, &ExcaliburWindow::on_action_circuit_file_open));
+        save_table_button.signal_clicked().connect(
+            sigc::bind<0>(sigc::mem_fun(*this, &ExcaliburWindow::on_action_table_file_save), false));
     }
 
     ~ExcaliburWindow() override {};
@@ -263,19 +352,29 @@ public:
                           file_dialog));
     }
 
-    void on_action_table_file_save() {
+    void on_action_circuit_file_open() {
+        auto file_dialog = Gtk::FileDialog::create();
+        file_dialog->set_modal(true);
+        file_dialog->set_title("Open circuit file");
+        file_dialog->open(*this,
+            sigc::bind<0>(sigc::mem_fun(*this,
+                                        &ExcaliburWindow::on_circuit_file_open_dialog_response),
+                          file_dialog));
+    }
+
+    void on_action_table_file_save(bool wide_export) {
         auto file_dialog = Gtk::FileDialog::create();
         file_dialog->set_modal(true);
         file_dialog->set_title("Save table file");
         file_dialog->save(*this,
-            sigc::bind<0>(sigc::mem_fun(*this,
-                                        &ExcaliburWindow::on_table_file_save_dialog_response),
-                          file_dialog));
+            sigc::bind<0>(sigc::bind<0>(sigc::mem_fun(*this, &ExcaliburWindow::on_table_file_save_dialog_response),
+                                        file_dialog),
+                          wide_export));
     }
 
     template<typename Iterator>
-    struct SizesParser : boost::spirit::qi::grammar<Iterator, TableSizes(), boost::spirit::qi::ascii::space_type> {
-        SizesParser() : SizesParser::base_type(start) {
+    struct TableSizesParser : boost::spirit::qi::grammar<Iterator, TableSizes(), boost::spirit::qi::ascii::space_type> {
+        TableSizesParser() : TableSizesParser::base_type(start) {
             using boost::spirit::qi::uint_;
             using boost::spirit::qi::lit;
             using boost::phoenix::val;
@@ -325,6 +424,29 @@ public:
         boost::spirit::qi::rule<Iterator, std::vector<integral_type>, boost::spirit::qi::ascii::space_type> start;
     };
 
+    template<typename Iterator>
+    struct CircuitSizesParser : boost::spirit::qi::grammar<Iterator, CircuitSizes(),
+                                                           boost::spirit::qi::ascii::space_type> {
+        CircuitSizesParser() : CircuitSizesParser::base_type(start) {
+            using boost::spirit::qi::uint_;
+            using boost::spirit::qi::lit;
+            using boost::phoenix::val;
+            using boost::phoenix::construct;
+
+            start = lit("gates_size:") > uint_ >
+                    lit("copy_constraints_size:") > uint_ >
+                    lit("lookup_gates_size:") > uint_;
+
+            boost::spirit::qi::on_error<boost::spirit::qi::fail>(
+                start,
+                std::cerr << val("Error! Expecting ") << boost::spirit::qi::_4 << val(" here: \"")
+                          << construct<std::string>(boost::spirit::_3, boost::spirit::_2) << val("\"\n")
+            );
+        }
+
+        boost::spirit::qi::rule<Iterator, CircuitSizes(), boost::spirit::qi::ascii::space_type> start;
+    };
+
     void on_setup_column_item(std::size_t column, const Glib::RefPtr<Gtk::ListItem> &list_item) {
         auto button = Gtk::make_managed<Gtk::Button>();
         auto label = Gtk::make_managed<Gtk::Label>();
@@ -359,12 +481,12 @@ public:
         if (!mitem) {
             return;
         }
+        mitem->set_widget(column, button);
+        mitem->set_widget_loaded(column, true);
         label->set_text(mitem->to_string(column));
-
-        std::pair<std::size_t, std::size_t> key = {mitem->get_row_index(), column};
-        if (active_label_tracker.row == key.first && active_label_tracker.column == key.second) {
-            active_label_tracker.widget = label;
-            active_label_tracker.is_alive = true;
+        CellState state = mitem->get_cell_state(column);
+        if (state.is_selected()) {
+            button->add_css_class("selected");
         }
     }
 
@@ -374,14 +496,7 @@ public:
         if (!mitem) {
             return;
         }
-        std::pair<std::size_t, std::size_t> key = {mitem->get_row_index(), column};
-        if (key.first == active_label_tracker.row && key.second == active_label_tracker.column) {
-            active_label_tracker.is_alive = false;
-        }
-        auto it = highlighted_items.find(key);
-        if (it != highlighted_items.end()) {
-            it->second.is_alive = false;
-        }
+        mitem->set_widget_loaded(column, false);
     }
 
     void on_table_file_open_dialog_response(Glib::RefPtr<Gtk::FileDialog> file_dialog,
@@ -392,8 +507,6 @@ public:
         auto file_size = file_info->get_size();
 
         using boost::spirit::qi::phrase_parse;
-        using boost::spirit::qi::lit;
-        using boost::phoenix::ref;
         // 200 should be enough for the first row
         const std::size_t first_line_size = file_size < 200 ? file_size : 200;
         char* buffer = new char[first_line_size + 1];
@@ -405,7 +518,7 @@ public:
             return;
         }
 
-        SizesParser<decltype(first_line.begin())> sizes_parser;
+        TableSizesParser<decltype(first_line.begin())> sizes_parser;
         auto first_line_begin = first_line.begin();
 
         bool r = phrase_parse(first_line_begin, first_line.end(), sizes_parser, boost::spirit::ascii::space, sizes);
@@ -417,15 +530,14 @@ public:
 
         delete[] buffer;
 
-        // All lines after the first should be the same length, if no one has messed with the output of table exporter
-        auto line_size = (file_size - first_line.size()) / sizes.max_size;
-        buffer = new char[line_size + 1];
+        auto predicted_line_size = (file_size - first_line.size()) / sizes.max_size * 2;
+        buffer = new char[predicted_line_size + 1];
         TableRowParser<decltype(first_line.begin())> row_parser(sizes);
 
         auto store = Gio::ListStore<RowObject<BlueprintFieldType>>::create();
 
         for (std::uint32_t i = 0; i < sizes.max_size; i++) {
-            std::string line = read_line_from_gstream(stream, line_size, file_size, buffer);
+            std::string line = read_line_from_gstream(stream, predicted_line_size, file_size, buffer);
             if (line.empty()) {
                 std::cerr << "Failed to read line " << i + 1 << " of the file" << std::endl;
                 delete[] buffer;
@@ -492,7 +604,51 @@ public:
         table.set_model(model);
     }
 
+    void on_circuit_file_open_dialog_response(Glib::RefPtr<Gtk::FileDialog> file_dialog,
+                                              std::shared_ptr<Gio::AsyncResult> &res) {
+        auto result = file_dialog->open_finish(res);
+        auto stream = result->read();
+        auto file_info = result->query_info();
+        auto file_size = file_info->get_size();
+
+        using boost::spirit::qi::phrase_parse;
+        // 200 should be enough for the first row
+        const std::size_t first_line_size = file_size < 200 ? file_size : 200;
+        char* buffer = new char[first_line_size + 1];
+
+        std::string first_line = read_line_from_gstream(stream, first_line_size, file_size, buffer);
+        if (first_line.empty()) {
+            std::cerr << "Failed to read the header line." << std::endl;
+            delete[] buffer;
+            return;
+        }
+
+        CircuitSizesParser<decltype(first_line.begin())> sizes_parser;
+        auto first_line_begin = first_line.begin();
+
+        bool r = phrase_parse(first_line_begin, first_line.end(), sizes_parser, boost::spirit::ascii::space,
+                              circuit.sizes);
+        if (!r || first_line_begin != first_line.end()) {
+            std::cerr << "Failed to parse the header line." << std::endl;
+            delete[] buffer;
+            return;
+        }
+
+        std::cout << "Successfully parsed the header line." << std::endl;
+        std::cout << circuit.sizes.gates_size << std::endl;
+        std::cout << circuit.sizes.copy_constraints_size << std::endl;
+        std::cout << circuit.sizes.lookup_gates_size << std::endl;
+
+        delete[] buffer;
+
+        auto line_size = (file_size - first_line.size()) / sizes.max_size;
+        buffer = new char[line_size + 1];
+
+        delete[] buffer;
+    }
+
     void on_table_file_save_dialog_response(Glib::RefPtr<Gtk::FileDialog> file_dialog,
+                                            bool wide_export,
                                             std::shared_ptr<Gio::AsyncResult> &res) {
         auto result = file_dialog->save_finish(res);
         auto stream = result->replace();
@@ -513,7 +669,7 @@ public:
             return;
         }
         auto list_model = model->get_model();
-        std::uint32_t width = (BlueprintFieldType::modulus_bits + 4 - 1) / 4;
+        std::uint32_t width = wide_export ? (BlueprintFieldType::modulus_bits + 4 - 1) / 4 : 0;
         std::size_t hex_sizes = sizes.witnesses_size + sizes.public_inputs_size + sizes.constants_size;
         for (std::size_t i = 0; i < sizes.max_size; i++) {
             std::stringstream row_stream;
@@ -554,15 +710,6 @@ public:
         stream->close();
     }
 
-    void clear_highlights() {
-        for (auto &item : highlighted_items) {
-            if (item.second.is_alive) {
-                item.second.widget->remove_css_class("selected");
-            }
-        }
-        highlighted_items.clear();
-    }
-
     void on_cell_clicked(std::size_t column, const Glib::RefPtr<Gtk::ListItem> &list_item) {
         auto item = list_item->get_item();
         auto mitem = dynamic_cast<RowObject<BlueprintFieldType>*>(&*item);
@@ -572,24 +719,34 @@ public:
         std::size_t row = mitem->get_row_index();
         auto button = dynamic_cast<Gtk::Button*>(&*list_item->get_child());
 
-        if (active_label_tracker.row == row && active_label_tracker.column == column || button == nullptr) {
+        if (selected_cell.row == row && selected_cell.column == column || button == nullptr) {
             return;
         }
 
-        element_entry.set_text(mitem->to_string(column));
-        active_label_tracker.row = row;
-        active_label_tracker.column = column;
+        if (selected_cell.row_object != nullptr) {
+            auto old_row = selected_cell.row_object;
+            CellState& old_row_state = old_row->get_cell_state(selected_cell.column);
+            old_row_state.unselect();
+            if (old_row->get_widget_loaded(selected_cell.column)) {
+                auto button = old_row->get_widget(selected_cell.column);
+                button->remove_css_class("selected");
+            }
+        }
 
-        clear_highlights();
+        selected_cell.row = row;
+        selected_cell.column = column;
+        selected_cell.row_object = mitem;
+
         button->add_css_class("selected");
-        highlighted_items[std::make_pair(row, column)] = WidgetStatusTracker(button);
-        active_label_tracker.widget = dynamic_cast<Gtk::Label*>(&*button->get_child());
-        active_label_tracker.is_alive = true;
+        CellState& row_state = mitem->get_cell_state(column);
+        row_state.select();
+
+        element_entry.set_text(mitem->to_string(column));
     }
 
     void on_entry_key_released(guint keyval, guint keycode, Gdk::ModifierType state) {
         // Didn't select any cell or keyval != enter
-        if (active_label_tracker.row == -1 || active_label_tracker.column == -1 || keyval != 65293) {
+        if (keyval != 65293 || selected_cell.row_object == nullptr) {
             return;
         }
         std::stringstream ss;
@@ -607,7 +764,8 @@ public:
             std::cout << "No model" << std::endl;
             return;
         }
-        auto object_row = model->get_object(active_label_tracker.row);
+
+        auto object_row = model->get_object(selected_cell.row);
         if (!object_row) {
             std::cout << "No object" << std::endl;
             return;
@@ -617,9 +775,16 @@ public:
             std::cout << "Failed cast to row" << std::endl;
             return;
         }
-        row->set_row_item(value, active_label_tracker.column);
-        if (active_label_tracker.is_alive) {
-            active_label_tracker.widget->set_text(row->to_string(active_label_tracker.column));
+        row->set_row_item(value, selected_cell.column);
+
+        if (row->get_widget_loaded(selected_cell.column)) {
+            auto button = row->get_widget(selected_cell.column);
+            auto label = dynamic_cast<Gtk::Label*>(&*button->get_child());
+            if (!label) {
+                std::cout << "Failed cast to label" << std::endl;
+                return;
+            }
+            label->set_text(element_entry.get_text());
         }
     }
 
@@ -628,10 +793,9 @@ protected:
     Gtk::Box vbox_prime, vbox_controls;
     Gtk::ScrolledWindow table_window;
     Gtk::ColumnView table;
-    Gtk::Button open_button, save_button;
+    Gtk::Button open_table_button, open_circuit_button, save_table_button;
 private:
-    std::map<std::pair<std::size_t, std::size_t>, WidgetStatusTracker<Gtk::Button>> highlighted_items;
-
-    WidgetTracker<Gtk::Label> active_label_tracker;
     TableSizes sizes;
+    CellTracker<Gtk::Button, BlueprintFieldType> selected_cell;
+    CircuitContainer<BlueprintFieldType> circuit;
 };
