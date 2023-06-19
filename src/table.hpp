@@ -72,14 +72,15 @@
 
 template<typename BlueprintFieldType>
 struct circuit_container {
+    // We have to roll a custom container for this because ArithmetizationParams are constexpr in the circuit.
     using plonk_constraint_type = nil::crypto3::zk::snark::plonk_constraint<BlueprintFieldType>;
-    using gate_type = nil::crypto3::zk::snark::plonk_gate<BlueprintFieldType, plonk_constraint_type>;
+    using plonk_gate_type = nil::crypto3::zk::snark::plonk_gate<BlueprintFieldType, plonk_constraint_type>;
     using plonk_copy_constraint_type = nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>;
 
     circuit_sizes sizes;
-    std::map<std::size_t, gate_type> gates;
+    std::vector<plonk_gate_type> gates;
     std::vector<plonk_copy_constraint_type> copy_constraints;
-    // Todo: add lookup gates
+    // TODO: add lookup gates
 };
 
 std::string read_line_from_gstream(Glib::RefPtr<Gio::FileInputStream> stream,
@@ -156,14 +157,15 @@ struct CellState {
 };
 
 template <typename BlueprintFieldType>
-class RowObject : public Glib::Object {
+class row_object : public Glib::Object {
 public:
+    // We have to roll a custom container for this because ArithmetizationParams are constexpr in the assignment table.
 
     using value_type = typename BlueprintFieldType::value_type;
     using integral_type = typename BlueprintFieldType::integral_type;
 
-    static Glib::RefPtr<RowObject> create(const std::vector<integral_type>& row_, std::size_t row_index_) {
-        return Glib::make_refptr_for_instance<RowObject>(new RowObject(row_, row_index_));
+    static Glib::RefPtr<row_object> create(const std::vector<integral_type>& row_, std::size_t row_index_) {
+        return Glib::make_refptr_for_instance<row_object>(new row_object(row_, row_index_));
     }
 
     const Glib::ustring& to_string(std::size_t index) const {
@@ -220,7 +222,7 @@ public:
     }
 
 protected:
-    RowObject(const std::vector<integral_type>& row_, std::size_t row_index_) :
+    row_object(const std::vector<integral_type>& row_, std::size_t row_index_) :
             row_index(row_index_), cell_states(row_.size(), CellState::CellStateFlags::NORMAL),
             widgets(row_.size(), nullptr), widget_loaded(row_.size(), false) {
         row.reserve(row_.size());
@@ -251,7 +253,7 @@ template<typename WidgetType, typename BlueprintFieldType>
 struct CellTracker {
     CellTracker() : row(-1), column(-1), row_object(nullptr) {}
 
-    RowObject<BlueprintFieldType>* row_object;
+    row_object<BlueprintFieldType>* row_object;
     std::size_t row, column;
 };
 
@@ -261,6 +263,9 @@ class ExcaliburWindow : public Gtk::ApplicationWindow {
 public:
     using integral_type = typename BlueprintFieldType::integral_type;
     using value_type = typename BlueprintFieldType::value_type;
+    using plonk_copy_constraint_type = nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>;
+    using plonk_constraint_type = nil::crypto3::zk::snark::plonk_constraint<BlueprintFieldType>;
+    using plonk_gate_type = nil::crypto3::zk::snark::plonk_gate<BlueprintFieldType, plonk_constraint_type>;
 
     ExcaliburWindow() : table(), element_entry(), vbox_prime(), table_window(), vbox_controls(),
                         open_table_button("Open Table"), save_table_button("Save"),
@@ -375,7 +380,7 @@ public:
         }
 
         auto item = list_item->get_item();
-        auto mitem = dynamic_cast<RowObject<BlueprintFieldType>*>(&*item);
+        auto mitem = dynamic_cast<row_object<BlueprintFieldType>*>(&*item);
         if (!mitem) {
             return;
         }
@@ -390,7 +395,7 @@ public:
 
     void on_unbind_column_item(std::size_t column, const Glib::RefPtr<Gtk::ListItem> &list_item) {
         auto item = list_item->get_item();
-        auto mitem = dynamic_cast<RowObject<BlueprintFieldType>*>(&*item);
+        auto mitem = dynamic_cast<row_object<BlueprintFieldType>*>(&*item);
         if (!mitem) {
             return;
         }
@@ -432,7 +437,7 @@ public:
         buffer = new char[predicted_line_size + 1];
         table_row_parser<decltype(first_line.begin()), BlueprintFieldType> row_parser(sizes);
 
-        auto store = Gio::ListStore<RowObject<BlueprintFieldType>>::create();
+        auto store = Gio::ListStore<row_object<BlueprintFieldType>>::create();
 
         for (std::uint32_t i = 0; i < sizes.max_size; i++) {
             std::string line = read_line_from_gstream(stream, predicted_line_size, file_size, buffer);
@@ -452,7 +457,7 @@ public:
                 return;
             }
 
-            store->append(RowObject<BlueprintFieldType>::create(row, i));
+            store->append(row_object<BlueprintFieldType>::create(row, i));
         }
         std::cout << "Successfully parsed the file" << std::endl;
         delete[] buffer;
@@ -504,7 +509,6 @@ public:
 
     void on_circuit_file_open_dialog_response(Glib::RefPtr<Gtk::FileDialog> file_dialog,
                                               std::shared_ptr<Gio::AsyncResult> &res) {
-        using plonk_constraint_type = nil::crypto3::zk::snark::plonk_constraint<BlueprintFieldType>;
 
         auto result = file_dialog->open_finish(res);
         auto stream = result->read();
@@ -538,6 +542,7 @@ public:
 
         auto predicted_line_size = (file_size - first_line.size()) / circuit.sizes.gates_size;
         buffer = new char[predicted_line_size + 1];
+        circuit.gates.reserve(circuit.sizes.gates_size);
         for (std::uint32_t i = 0; i < circuit.sizes.gates_size; i++) {
             std::string line = read_line_from_gstream(stream, predicted_line_size, file_size, buffer);
             if (line.empty()) {
@@ -547,7 +552,6 @@ public:
             }
             gate_header gate_header;
             auto line_begin = line.begin();
-            std::cout << line << std::endl;
             gate_header_parser<decltype(line.begin())> header_parser;
             r = phrase_parse(line_begin, line.end(), header_parser, boost::spirit::ascii::space, gate_header);
             if (!r || line_begin != line.end()) {
@@ -555,7 +559,8 @@ public:
                 delete[] buffer;
                 return;
             }
-
+            std::vector<plonk_constraint_type> constraints;
+            constraints.reserve(gate_header.constraints_size);
             gate_constraint_parser<decltype(line.begin()), BlueprintFieldType> constraint_parser;
             for (std::size_t j = 0; j < gate_header.constraints_size; j++) {
                 plonk_constraint_type constraint;
@@ -566,7 +571,6 @@ public:
                     delete[] buffer;
                     return;
                 }
-                std::cout << line << std::endl;
                 line_begin = line.begin();
                 r = phrase_parse(line_begin, line.end(), constraint_parser, boost::spirit::ascii::space, constraint);
                 if (!r || line_begin != line.end()) {
@@ -575,8 +579,33 @@ public:
                     delete[] buffer;
                     return;
                 }
-                std::cout << constraint << std::endl;
+                constraints.push_back(constraint);
             }
+
+            circuit.gates.emplace_back(plonk_gate_type(gate_header.selector_index, constraints));
+        }
+        std::sort(circuit.gates.begin(), circuit.gates.end(),
+                  [](const plonk_gate_type& a, const plonk_gate_type& b)
+                    { return a.selector_index < b.selector_index; });
+
+        copy_constraint_parser<decltype(first_line.begin()), BlueprintFieldType> copy_constraint_parser;
+        circuit.copy_constraints.reserve(circuit.sizes.copy_constraints_size);
+        for (std::size_t i = 0; i < circuit.sizes.copy_constraints_size; i++) {
+            plonk_copy_constraint_type constraint;
+            std::string line = read_line_from_gstream(stream, predicted_line_size, file_size, buffer);
+            if (line.empty()) {
+                std::cerr << "Failed to read line for" << i << "'th copy constraint" << std::endl;
+                delete[] buffer;
+                return;
+            }
+            auto line_begin = line.begin();
+            r = phrase_parse(line_begin, line.end(), copy_constraint_parser, boost::spirit::ascii::space, constraint);
+            if (!r || line_begin != line.end()) {
+                std::cerr << "Failed to parse copy constraint " << i + 1 << std::endl;
+                delete[] buffer;
+                return;
+            }
+            circuit.copy_constraints.push_back(constraint);
         }
 
         delete[] buffer;
@@ -615,7 +644,7 @@ public:
                 stream->close();
                 return;
             }
-            auto row = dynamic_cast<RowObject<BlueprintFieldType>*>(&*object_row);
+            auto row = dynamic_cast<row_object<BlueprintFieldType>*>(&*object_row);
             if (!row) {
                 std::cout << "No row" << std::endl;
                 stream->close();
@@ -647,7 +676,7 @@ public:
 
     void on_cell_clicked(std::size_t column, const Glib::RefPtr<Gtk::ListItem> &list_item) {
         auto item = list_item->get_item();
-        auto mitem = dynamic_cast<RowObject<BlueprintFieldType>*>(&*item);
+        auto mitem = dynamic_cast<row_object<BlueprintFieldType>*>(&*item);
         if (!mitem) {
             return;
         }
@@ -705,7 +734,7 @@ public:
             std::cout << "No object" << std::endl;
             return;
         }
-        auto row = dynamic_cast<RowObject<BlueprintFieldType>*>(&*object_row);
+        auto row = dynamic_cast<row_object<BlueprintFieldType>*>(&*object_row);
         if (!row) {
             std::cout << "Failed cast to row" << std::endl;
             return;

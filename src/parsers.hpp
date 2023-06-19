@@ -64,13 +64,13 @@ BOOST_FUSION_ADAPT_STRUCT(
 )
 
 struct gate_header {
-    uint32_t selector_num,
+    uint32_t selector_index,
              constraints_size;
 };
 
 BOOST_FUSION_ADAPT_STRUCT(
     gate_header,
-    (uint32_t, selector_num)
+    (uint32_t, selector_index)
     (uint32_t, constraints_size)
 )
 
@@ -102,6 +102,19 @@ struct pow_constructor_impl {
     }
 };
 
+template<typename BlueprintFieldType>
+struct copy_constraint_constructor {
+    using var = nil::crypto3::zk::snark::plonk_variable<BlueprintFieldType>;
+    using plonk_copy_constraint_type = nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>;
+
+    typedef plonk_copy_constraint_type result_type;
+
+    template<typename Arg1, typename Arg2>
+    plonk_copy_constraint_type operator()(Arg1 var1, Arg2 var2) const {
+        return plonk_copy_constraint_type(var1, var2);
+    }
+};
+
 template<typename Iterator>
 struct table_sizes_parser : boost::spirit::qi::grammar<Iterator, table_sizes(), boost::spirit::qi::ascii::space_type> {
     table_sizes_parser() : table_sizes_parser::base_type(start) {
@@ -129,8 +142,7 @@ struct table_sizes_parser : boost::spirit::qi::grammar<Iterator, table_sizes(), 
 template<typename Iterator, typename BlueprintFieldType>
 struct table_row_parser : boost::spirit::qi::grammar<Iterator, std::vector<typename BlueprintFieldType::integral_type>,
                                                     boost::spirit::qi::ascii::space_type> {
-    table_row_parser(table_sizes sizes)
-                : table_row_parser::base_type(start) {
+    table_row_parser(table_sizes sizes) : table_row_parser::base_type(start) {
         using boost::spirit::qi::lit;
         using boost::spirit::qi::repeat;
         using boost::spirit::qi::uint_parser;
@@ -204,10 +216,9 @@ struct gate_constraint_parser : boost::spirit::qi::grammar<Iterator,
         nil::crypto3::zk::snark::plonk_constraint<BlueprintFieldType>(),
         boost::spirit::qi::ascii::space_type> {
     using plonk_constraint_type = nil::crypto3::zk::snark::plonk_constraint<BlueprintFieldType>;
-    using gate_type = nil::crypto3::zk::snark::plonk_gate<BlueprintFieldType, plonk_constraint_type>;
+    using plonk_gate_type = nil::crypto3::zk::snark::plonk_gate<BlueprintFieldType, plonk_constraint_type>;
     using var = nil::crypto3::zk::snark::plonk_variable<BlueprintFieldType>;
     using term = nil::crypto3::math::term<var>;
-    using expression = nil::crypto3::math::expression<var>;
 
     gate_constraint_parser() : gate_constraint_parser::base_type(start) {
         using boost::spirit::qi::uint_;
@@ -234,22 +245,22 @@ struct gate_constraint_parser : boost::spirit::qi::grammar<Iterator,
                                 [_val = var_constructor(_1, _2, _val)];
         // This is a bit confusing, as atom has the type of term<var>.
         atom = variable | constant;
-        expression_ = term_[_val = construct<plonk_constraint_type>(_1)]
+        expression = term_[_val = construct<plonk_constraint_type>(_1)]
                         >> *(('+' > term_)[_val = _val + _1] | ('-' > term_)[_val = _val - _1]);
         term_ = exponent[_val = construct<plonk_constraint_type>(_1)] >> *(('*' > exponent)[_val = _val * _1]);
         // uint_ is used here, because the expression does not support arbitrary exponents
         // The pow function only takes size_t.
         exponent = factor[_val = construct<plonk_constraint_type>(_1)]
                     >> -(('^' > uint_)[_val = pow_constructor(_val, _1)]);
-        factor = atom | (lit("(") > expression_ > lit(")")) | (lit("-") >> factor);
-        start = expression_;
+        factor = atom | (lit("(") > expression > lit(")")) | (lit("-") >> factor);
+        start = expression;
 
-        //BOOST_SPIRIT_DEBUG_NODES((start)(expression_)(term_)(factor)(atom)(variable));
+        //BOOST_SPIRIT_DEBUG_NODES((start)(expression)(term_)(factor)(atom)(variable));
 
         boost::spirit::qi::on_error<boost::spirit::qi::fail>(
             start,
             std::cerr << val("Error! Expecting ") << boost::spirit::qi::_4 << val(" here: \"")
-                        << construct<std::string>(boost::spirit::_3, boost::spirit::_2) << val("\"\n")
+                      << construct<std::string>(boost::spirit::_3, boost::spirit::_2) << val("\"\n")
         );
     }
 
@@ -259,8 +270,52 @@ struct gate_constraint_parser : boost::spirit::qi::grammar<Iterator,
     boost::spirit::qi::rule<Iterator, term(), boost::spirit::qi::ascii::space_type> atom;
     boost::spirit::qi::rule<Iterator, var(), boost::spirit::qi::ascii::space_type> variable;
     boost::spirit::qi::rule<Iterator, boost::spirit::qi::ascii::space_type> constant;
-    boost::spirit::qi::rule<Iterator, plonk_constraint_type(), boost::spirit::qi::ascii::space_type> expression_;
+    boost::spirit::qi::rule<Iterator, plonk_constraint_type(), boost::spirit::qi::ascii::space_type> expression;
     boost::spirit::qi::rule<Iterator, plonk_constraint_type(), boost::spirit::qi::ascii::space_type> factor;
     boost::spirit::qi::rule<Iterator, plonk_constraint_type(), boost::spirit::qi::ascii::space_type> exponent;
     boost::spirit::qi::rule<Iterator, plonk_constraint_type(), boost::spirit::qi::ascii::space_type> term_;
+};
+
+template<typename Iterator, typename BlueprintFieldType>
+struct copy_constraint_parser : boost::spirit::qi::grammar<Iterator,
+        nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>(),
+        boost::spirit::qi::ascii::space_type> {
+    using plonk_copy_constraint_type = nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>;
+    using var = nil::crypto3::zk::snark::plonk_variable<BlueprintFieldType>;
+
+    copy_constraint_parser() : copy_constraint_parser::base_type(start) {
+        using boost::spirit::qi::uint_;
+        using boost::spirit::qi::int_;
+        using boost::spirit::qi::lit;
+        using boost::spirit::qi::char_;
+        using boost::spirit::qi::_1;
+        using boost::spirit::qi::_2;
+        using boost::spirit::qi::_3;
+        using boost::spirit::qi::_val;
+        using boost::phoenix::val;
+        using boost::phoenix::construct;
+        using boost::phoenix::function;
+        using boost::spirit::qi::int_parser;
+
+        function<var_constructor_impl<BlueprintFieldType>> var_constructor;
+        function<copy_constraint_constructor<BlueprintFieldType>> copy_constraint_constructor;
+        auto constant = int_parser<typename BlueprintFieldType::integral_type, 10, 1,
+                                   (BlueprintFieldType::modulus_bits + 10 - 1) / 10>();
+        variable = (lit("var_") > uint_ > lit("_") > uint_
+                                > (lit("_witness")[_val = var(0, 0, false, var::column_type::witness)] |
+                                   lit("_public_input")[_val = var(0, 0, false, var::column_type::public_input)] |
+                                   lit("_constant")[_val = var(0, 0, false, var::column_type::constant)]))
+                                [_val = var_constructor(_1, _2, _val)];
+        start = (variable > variable)[_val = copy_constraint_constructor(_1, _2)];
+
+        boost::spirit::qi::on_error<boost::spirit::qi::fail>(
+            start,
+            std::cerr << val("Error! Expecting ") << boost::spirit::qi::_4 << val(" here: \"")
+                      << construct<std::string>(boost::spirit::_3, boost::spirit::_2) << val("\"\n")
+        );
+    }
+
+    boost::spirit::qi::rule<Iterator, plonk_copy_constraint_type(),
+                            boost::spirit::qi::ascii::space_type> start;
+    boost::spirit::qi::rule<Iterator, var(), boost::spirit::qi::ascii::space_type> variable;
 };
