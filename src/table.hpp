@@ -22,6 +22,8 @@
 
 #pragma once
 
+//#define BOOST_SPIRIT_DEBUG
+
 #include <cstdint>
 #include <iostream>
 #include <iomanip>
@@ -31,9 +33,7 @@
 #include <map>
 
 #include <boost/spirit/include/qi.hpp>
-#include <boost/spirit/include/phoenix_core.hpp>
-#include <boost/spirit/include/phoenix_operator.hpp>
-#include <boost/phoenix/object/construct.hpp>
+#include <boost/phoenix/phoenix.hpp>
 
 #include <giomm/liststore.h>
 
@@ -65,44 +65,18 @@
 #include <nil/crypto3/zk/snark/arithmetization/plonk/gate.hpp>
 #include <nil/crypto3/zk/snark/arithmetization/plonk/copy_constraint.hpp>
 #include <nil/crypto3/zk/snark/arithmetization/plonk/constraint.hpp>
+#include <nil/crypto3/zk/math/expression.hpp>
+#include <nil/crypto3/zk/snark/arithmetization/plonk/variable.hpp>
 
-struct TableSizes {
-    uint32_t witnesses_size,
-             public_inputs_size,
-             constants_size,
-             selectors_size,
-             max_size;
-};
-
-BOOST_FUSION_ADAPT_STRUCT(
-    TableSizes,
-    (uint32_t, witnesses_size)
-    (uint32_t, public_inputs_size)
-    (uint32_t, constants_size)
-    (uint32_t, selectors_size)
-    (uint32_t, max_size)
-)
-
-struct CircuitSizes {
-    uint32_t gates_size,
-             copy_constraints_size,
-             lookup_gates_size;
-};
-
-BOOST_FUSION_ADAPT_STRUCT(
-    CircuitSizes,
-    (uint32_t, gates_size)
-    (uint32_t, copy_constraints_size)
-    (uint32_t, lookup_gates_size)
-)
+#include "parsers.hpp"
 
 template<typename BlueprintFieldType>
-struct CircuitContainer {
+struct circuit_container {
     using plonk_constraint_type = nil::crypto3::zk::snark::plonk_constraint<BlueprintFieldType>;
     using gate_type = nil::crypto3::zk::snark::plonk_gate<BlueprintFieldType, plonk_constraint_type>;
     using plonk_copy_constraint_type = nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>;
 
-    CircuitSizes sizes;
+    circuit_sizes sizes;
     std::map<std::size_t, gate_type> gates;
     std::vector<plonk_copy_constraint_type> copy_constraints;
     // Todo: add lookup gates
@@ -269,7 +243,6 @@ private:
     std::vector<value_type> row;
     std::size_t row_index;
     std::vector<CellState> cell_states;
-    // We don't use a WidgetStatusTracker here, because of memory gains when storing bools.
     std::vector<Gtk::Button*> widgets;
     std::vector<bool> widget_loaded;
 };
@@ -372,81 +345,6 @@ public:
                           wide_export));
     }
 
-    template<typename Iterator>
-    struct TableSizesParser : boost::spirit::qi::grammar<Iterator, TableSizes(), boost::spirit::qi::ascii::space_type> {
-        TableSizesParser() : TableSizesParser::base_type(start) {
-            using boost::spirit::qi::uint_;
-            using boost::spirit::qi::lit;
-            using boost::phoenix::val;
-            using boost::phoenix::construct;
-
-            start = lit("witnesses_size:") > uint_ >
-                    lit("public_inputs_size:") > uint_ >
-                    lit("constants_size:") > uint_ >
-                    lit("selectors_size:") > uint_ >
-                    lit("max_size:") > uint_;
-
-            boost::spirit::qi::on_error<boost::spirit::qi::fail>(
-                start,
-                std::cerr << val("Error! Expecting ") << boost::spirit::qi::_4 << val(" here: \"")
-                          << construct<std::string>(boost::spirit::_3, boost::spirit::_2) << val("\"\n")
-            );
-        }
-
-        boost::spirit::qi::rule<Iterator, TableSizes(), boost::spirit::qi::ascii::space_type> start;
-    };
-
-    template<typename Iterator>
-    struct TableRowParser : boost::spirit::qi::grammar<Iterator, std::vector<integral_type>,
-                                                       boost::spirit::qi::ascii::space_type> {
-        TableRowParser(TableSizes sizes)
-                    : TableRowParser::base_type(start) {
-            using boost::spirit::qi::lit;
-            using boost::spirit::qi::repeat;
-            using boost::spirit::qi::uint_parser;
-            using boost::spirit::qi::uint_;
-            using boost::phoenix::val;
-            using boost::phoenix::construct;
-
-            auto hex_rule = uint_parser<integral_type, 16, 1, (BlueprintFieldType::modulus_bits + 4 - 1) / 4>();
-            start = repeat(sizes.witnesses_size)[hex_rule] > lit('|') >
-                    repeat(sizes.public_inputs_size)[hex_rule] > lit('|') >
-                    repeat(sizes.constants_size)[hex_rule] > lit('|') >
-                    repeat(sizes.selectors_size)[hex_rule];
-
-            boost::spirit::qi::on_error<boost::spirit::qi::fail>(
-                start,
-                std::cerr << val("Error! Expecting ") << boost::spirit::qi::_4 << val(" here: \"")
-                          << construct<std::string>(boost::spirit::_3, boost::spirit::_2) << val("\"\n")
-            );
-        }
-
-        boost::spirit::qi::rule<Iterator, std::vector<integral_type>, boost::spirit::qi::ascii::space_type> start;
-    };
-
-    template<typename Iterator>
-    struct CircuitSizesParser : boost::spirit::qi::grammar<Iterator, CircuitSizes(),
-                                                           boost::spirit::qi::ascii::space_type> {
-        CircuitSizesParser() : CircuitSizesParser::base_type(start) {
-            using boost::spirit::qi::uint_;
-            using boost::spirit::qi::lit;
-            using boost::phoenix::val;
-            using boost::phoenix::construct;
-
-            start = lit("gates_size:") > uint_ >
-                    lit("copy_constraints_size:") > uint_ >
-                    lit("lookup_gates_size:") > uint_;
-
-            boost::spirit::qi::on_error<boost::spirit::qi::fail>(
-                start,
-                std::cerr << val("Error! Expecting ") << boost::spirit::qi::_4 << val(" here: \"")
-                          << construct<std::string>(boost::spirit::_3, boost::spirit::_2) << val("\"\n")
-            );
-        }
-
-        boost::spirit::qi::rule<Iterator, CircuitSizes(), boost::spirit::qi::ascii::space_type> start;
-    };
-
     void on_setup_column_item(std::size_t column, const Glib::RefPtr<Gtk::ListItem> &list_item) {
         auto button = Gtk::make_managed<Gtk::Button>();
         auto label = Gtk::make_managed<Gtk::Label>();
@@ -518,7 +416,7 @@ public:
             return;
         }
 
-        TableSizesParser<decltype(first_line.begin())> sizes_parser;
+        table_sizes_parser<decltype(first_line.begin())> sizes_parser;
         auto first_line_begin = first_line.begin();
 
         bool r = phrase_parse(first_line_begin, first_line.end(), sizes_parser, boost::spirit::ascii::space, sizes);
@@ -532,7 +430,7 @@ public:
 
         auto predicted_line_size = (file_size - first_line.size()) / sizes.max_size * 2;
         buffer = new char[predicted_line_size + 1];
-        TableRowParser<decltype(first_line.begin())> row_parser(sizes);
+        table_row_parser<decltype(first_line.begin()), BlueprintFieldType> row_parser(sizes);
 
         auto store = Gio::ListStore<RowObject<BlueprintFieldType>>::create();
 
@@ -564,7 +462,7 @@ public:
                     column_size = sizes.witnesses_size + sizes.public_inputs_size +
                                   sizes.constants_size + sizes.selectors_size;
 
-        auto get_column_name = [](const TableSizes &sizes, std::size_t i) {
+        auto get_column_name = [](const table_sizes &sizes, std::size_t i) {
             if (i == 0) {
                 return std::string("Row");
             }
@@ -606,6 +504,8 @@ public:
 
     void on_circuit_file_open_dialog_response(Glib::RefPtr<Gtk::FileDialog> file_dialog,
                                               std::shared_ptr<Gio::AsyncResult> &res) {
+        using plonk_constraint_type = nil::crypto3::zk::snark::plonk_constraint<BlueprintFieldType>;
+
         auto result = file_dialog->open_finish(res);
         auto stream = result->read();
         auto file_info = result->query_info();
@@ -623,7 +523,7 @@ public:
             return;
         }
 
-        CircuitSizesParser<decltype(first_line.begin())> sizes_parser;
+        circuit_sizes_parser<decltype(first_line.begin())> sizes_parser;
         auto first_line_begin = first_line.begin();
 
         bool r = phrase_parse(first_line_begin, first_line.end(), sizes_parser, boost::spirit::ascii::space,
@@ -634,15 +534,50 @@ public:
             return;
         }
 
-        std::cout << "Successfully parsed the header line." << std::endl;
-        std::cout << circuit.sizes.gates_size << std::endl;
-        std::cout << circuit.sizes.copy_constraints_size << std::endl;
-        std::cout << circuit.sizes.lookup_gates_size << std::endl;
-
         delete[] buffer;
 
-        auto line_size = (file_size - first_line.size()) / sizes.max_size;
-        buffer = new char[line_size + 1];
+        auto predicted_line_size = (file_size - first_line.size()) / circuit.sizes.gates_size;
+        buffer = new char[predicted_line_size + 1];
+        for (std::uint32_t i = 0; i < circuit.sizes.gates_size; i++) {
+            std::string line = read_line_from_gstream(stream, predicted_line_size, file_size, buffer);
+            if (line.empty()) {
+                std::cerr << "Failed to header line for " << i + 1 << "'th gate of the file" << std::endl;
+                delete[] buffer;
+                return;
+            }
+            gate_header gate_header;
+            auto line_begin = line.begin();
+            std::cout << line << std::endl;
+            gate_header_parser<decltype(line.begin())> header_parser;
+            r = phrase_parse(line_begin, line.end(), header_parser, boost::spirit::ascii::space, gate_header);
+            if (!r || line_begin != line.end()) {
+                std::cerr << "Failed to parse gate header for " << i + 1 << "'th gate of the file" << std::endl;
+                delete[] buffer;
+                return;
+            }
+
+            gate_constraint_parser<decltype(line.begin()), BlueprintFieldType> constraint_parser;
+            for (std::size_t j = 0; j < gate_header.constraints_size; j++) {
+                plonk_constraint_type constraint;
+                line = read_line_from_gstream(stream, predicted_line_size, file_size, buffer);
+                if (line.empty()) {
+                    std::cerr << "Failed to read line for" << j << "'th constraint for" << i << "'th gate of the file"
+                              << std::endl;
+                    delete[] buffer;
+                    return;
+                }
+                std::cout << line << std::endl;
+                line_begin = line.begin();
+                r = phrase_parse(line_begin, line.end(), constraint_parser, boost::spirit::ascii::space, constraint);
+                if (!r || line_begin != line.end()) {
+                    std::cerr << "Failed to parse gate constraint " << j + 1 << " for " << i + 1
+                              << "'th gate of the file" << std::endl;
+                    delete[] buffer;
+                    return;
+                }
+                std::cout << constraint << std::endl;
+            }
+        }
 
         delete[] buffer;
     }
@@ -795,7 +730,7 @@ protected:
     Gtk::ColumnView table;
     Gtk::Button open_table_button, open_circuit_button, save_table_button;
 private:
-    TableSizes sizes;
+    table_sizes sizes;
     CellTracker<Gtk::Button, BlueprintFieldType> selected_cell;
-    CircuitContainer<BlueprintFieldType> circuit;
+    circuit_container<BlueprintFieldType> circuit;
 };
