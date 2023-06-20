@@ -28,20 +28,20 @@
 #include <iostream>
 #include <iomanip>
 #include <cstring>
+#include <memory>
 #include <sstream>
 #include <vector>
-#include <map>
+#include <utility>
 
 #include <boost/spirit/include/qi.hpp>
 #include <boost/phoenix/phoenix.hpp>
+#include <boost/variant.hpp>
 
 #include <giomm/liststore.h>
 
 #include <glibmm/value.h>
 
 #include <pangomm/layout.h>
-
-#include <glibmm/property.h>
 
 #include <gtkmm/enums.h>
 #include <gtkmm/label.h>
@@ -61,6 +61,8 @@
 #include <gtkmm/noselection.h>
 #include <gtkmm/styleprovider.h>
 #include <gtkmm/eventcontrollerkey.h>
+#include <gtkmm/listview.h>
+#include <gtkmm/selectionmodel.h>
 
 #include <nil/crypto3/zk/snark/arithmetization/plonk/gate.hpp>
 #include <nil/crypto3/zk/snark/arithmetization/plonk/copy_constraint.hpp>
@@ -70,18 +72,6 @@
 
 #include "parsers.hpp"
 
-template<typename BlueprintFieldType>
-struct circuit_container {
-    // We have to roll a custom container for this because ArithmetizationParams are constexpr in the circuit.
-    using plonk_constraint_type = nil::crypto3::zk::snark::plonk_constraint<BlueprintFieldType>;
-    using plonk_gate_type = nil::crypto3::zk::snark::plonk_gate<BlueprintFieldType, plonk_constraint_type>;
-    using plonk_copy_constraint_type = nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>;
-
-    circuit_sizes sizes;
-    std::vector<plonk_gate_type> gates;
-    std::vector<plonk_copy_constraint_type> copy_constraints;
-    // TODO: add lookup gates
-};
 
 std::string read_line_from_gstream(Glib::RefPtr<Gio::FileInputStream> stream,
                                    gsize predicted_line_size,
@@ -145,7 +135,7 @@ struct CellState {
         state |= SELECTED;
     }
 
-    void unselect() {
+    void deselect() {
         state &= ~SELECTED;
     }
 
@@ -160,9 +150,11 @@ template <typename BlueprintFieldType>
 class row_object : public Glib::Object {
 public:
     // We have to roll a custom container for this because ArithmetizationParams are constexpr in the assignment table.
-
     using value_type = typename BlueprintFieldType::value_type;
     using integral_type = typename BlueprintFieldType::integral_type;
+    using plonk_copy_constraint_type = nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>;
+    using plonk_constraint_type = nil::crypto3::zk::snark::plonk_constraint<BlueprintFieldType>;
+    using var = nil::crypto3::zk::snark::plonk_variable<BlueprintFieldType>;
 
     static Glib::RefPtr<row_object> create(const std::vector<integral_type>& row_, std::size_t row_index_) {
         return Glib::make_refptr_for_instance<row_object>(new row_object(row_, row_index_));
@@ -221,10 +213,49 @@ public:
         widget_loaded[column_index] = loaded;
     }
 
+    static std::size_t get_actual_column_index(var variable, table_sizes &sizes) {
+        switch (variable.type) {
+            case var::column_type::witness:
+                return variable.index + 1;
+                break;
+            case var::column_type::public_input:
+                return variable.index + 1 + sizes.witnesses_size;
+                break;
+            case var::column_type::constant:
+                return variable.index + 1 + sizes.witnesses_size + sizes.public_inputs_size;
+                break;
+            default:
+                std::cerr << "Attempted to add copy constraint to selector column" << std::endl;
+                return -1;
+        }
+    }
+
+    void add_copy_constraint_to_cache(var variable, std::size_t constraint_num,
+                                      plonk_copy_constraint_type* constraint,
+                                      table_sizes &sizes) {
+        if (variable.rotation != row_index) {
+            std::cerr << "Attempted to add copy constraint to wrong row" << std::endl;
+            return;
+        }
+        std::size_t actual_column_index = get_actual_column_index(variable, sizes);
+        copy_constraints_cache[actual_column_index].push_back(std::make_pair(constraint_num, constraint));
+    }
+
+    std::size_t get_copy_constraints_size(std::size_t column_index) const {
+        return copy_constraints_cache[column_index].size();
+    }
+
+    std::pair<std::size_t, plonk_copy_constraint_type*> get_copy_constraint(std::size_t column_index,
+                                                                            std::size_t index) const {
+        return copy_constraints_cache[column_index][index];
+    }
+
 protected:
     row_object(const std::vector<integral_type>& row_, std::size_t row_index_) :
             row_index(row_index_), cell_states(row_.size(), CellState::CellStateFlags::NORMAL),
-            widgets(row_.size(), nullptr), widget_loaded(row_.size(), false) {
+            widgets(row_.size(), nullptr), widget_loaded(row_.size(), false),
+            copy_constraints_cache(row_.size()),
+            constraints_cache(row_.size(), std::vector<std::pair<std::size_t, plonk_constraint_type*>>(0)) {
         row.reserve(row_.size());
         std::copy(row_.begin(), row_.end(), std::back_inserter(row));
         string_cache.reserve(row.size());
@@ -243,17 +274,97 @@ protected:
 private:
     std::vector<Glib::ustring> string_cache;
     std::vector<value_type> row;
+    // Stores all copy constraints which affect the i'th item
+    // The size element in pair is for constraint num in container.
+    std::vector<std::vector<std::pair<std::size_t, plonk_copy_constraint_type*>>> copy_constraints_cache;
+    // Stores all constraints which affect the i'th item, with their selectors
+    std::vector<std::vector<std::pair<std::size_t, plonk_constraint_type*>>> constraints_cache;
     std::size_t row_index;
     std::vector<CellState> cell_states;
     std::vector<Gtk::Button*> widgets;
     std::vector<bool> widget_loaded;
+    // Using the model to traverse for gate constraints is annoying, we use previous/next pointers to make it easier.s
+    row_object *previous, *next;
 };
 
-template<typename WidgetType, typename BlueprintFieldType>
-struct CellTracker {
-    CellTracker() : row(-1), column(-1), row_object(nullptr) {}
+template<typename BlueprintFieldType>
+struct circuit_container {
+    // We have to roll a custom container for this because ArithmetizationParams are constexpr in the circuit.
+    using plonk_constraint_type = nil::crypto3::zk::snark::plonk_constraint<BlueprintFieldType>;
+    using plonk_gate_type = nil::crypto3::zk::snark::plonk_gate<BlueprintFieldType, plonk_constraint_type>;
+    using plonk_copy_constraint_type = nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>;
 
-    row_object<BlueprintFieldType>* row_object;
+    circuit_sizes sizes;
+    std::vector<plonk_gate_type> gates;
+    std::vector<plonk_copy_constraint_type> copy_constraints;
+    // TODO: add lookup gates
+
+    // This is used in order to be able to travers from copy constraint to the underlying variable and it's cell.
+    // We can utilise this in tandem with links from row_object to constraints to traverse and colour.
+    std::vector<std::pair<row_object<BlueprintFieldType>*, row_object<BlueprintFieldType>*>> copy_constraints_links;
+};
+
+template<typename BlueprintFieldType>
+struct constraint_object : public Glib::Object {
+    // A wrapper for displaying a constraint in a view.
+    using plonk_constraint_type = nil::crypto3::zk::snark::plonk_constraint<BlueprintFieldType>;
+    using plonk_copy_constraint_type = nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>;
+
+    static Glib::RefPtr<constraint_object> create(plonk_constraint_type* constraint_) {
+        return Glib::make_refptr_for_instance<constraint_object>(new constraint_object(constraint_));
+    }
+
+    static Glib::RefPtr<constraint_object> create(plonk_copy_constraint_type* constraint_) {
+        return Glib::make_refptr_for_instance<constraint_object>(new constraint_object(constraint_));
+    }
+
+    constraint_object(plonk_constraint_type* constraint_) : constraint(constraint_), button(nullptr),
+                                                            loaded(false) {
+        std::stringstream ss;
+        ss << constraint_;
+        cached_string = ss.str();
+    }
+    constraint_object(plonk_copy_constraint_type* constraint_) : constraint(constraint_), button(nullptr),
+                                                                 loaded(false) {
+        std::stringstream ss;
+        ss << "copy " << constraint_->first << " " << constraint_->second;
+        cached_string = ss.str();
+    }
+
+    Glib::ustring to_string() const {
+        return cached_string;
+    }
+
+    void select() {
+        state.select();
+    }
+
+    void deselect() {
+        state.deselect();
+    }
+
+    bool is_selected() const {
+        return state.is_selected();
+    }
+
+    boost::variant<plonk_constraint_type*, plonk_copy_constraint_type*> constraint;
+    Glib::ustring cached_string;
+    CellState state;
+    bool loaded;
+    Gtk::Button* button;
+};
+
+template<typename WidgetType, typename TrackedType>
+struct CellTracker {
+    CellTracker() : row(-1), column(-1), tracked_object(nullptr) {}
+
+    void clear() {
+        row = -1;
+        column = -1;
+        tracked_object = nullptr;
+    }
+
+    TrackedType* tracked_object;
     std::size_t row, column;
 };
 
@@ -266,10 +377,12 @@ public:
     using plonk_copy_constraint_type = nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>;
     using plonk_constraint_type = nil::crypto3::zk::snark::plonk_constraint<BlueprintFieldType>;
     using plonk_gate_type = nil::crypto3::zk::snark::plonk_gate<BlueprintFieldType, plonk_constraint_type>;
+    using var = nil::crypto3::zk::snark::plonk_variable<BlueprintFieldType>;
 
-    ExcaliburWindow() : table(), element_entry(), vbox_prime(), table_window(), vbox_controls(),
+    ExcaliburWindow() : table_view(), element_entry(), vbox_prime(), table_window(), vbox_controls(),
                         open_table_button("Open Table"), save_table_button("Save"),
-                        open_circuit_button("Open Circuit") {
+                        open_circuit_button("Open Circuit"), constraints_view(),
+                        constraints_window() {
         set_title("Excalibur Circuit Viewer: pull the bugs from the stone");
         set_resizable(true);
 
@@ -297,10 +410,14 @@ public:
         vbox_controls.append(element_entry);
         vbox_prime.append(vbox_controls);
 
-        table_window.set_child(table);
+        table_window.set_child(table_view);
         table_window.set_size_request(800, 600);
         table_window.set_vexpand(true);
         vbox_prime.append(table_window);
+
+        constraints_window.set_child(constraints_view);
+        constraints_window.set_size_request(-1, 128);
+        vbox_prime.append(constraints_window);
         vbox_prime.set_vexpand(true);
 
         set_child(vbox_prime);
@@ -319,6 +436,23 @@ public:
     }
 
     ~ExcaliburWindow() override {};
+
+    template<typename ObjectType>
+    void setup_constraint_view_from_store(const Glib::RefPtr<Gio::ListStore<ObjectType>> &store) {
+        // You might be wondering why don't I use the SingleSelect selection mechanism here, and create a button.
+        // It's signal is very questionable, and forces me to manually find out which constraint got selected
+        // and also what state it used to be in -- so I have to implement the selection tracking mechanism
+        // myself regardless. SingleSelection is a trap.
+        constraints_view.set_model(Gtk::NoSelection::create(store));
+        auto factory = Gtk::SignalListItemFactory::create();
+        factory->signal_setup().connect(
+            sigc::mem_fun(*this, &ExcaliburWindow::on_setup_constraint), false);
+        factory->signal_bind().connect(
+            sigc::mem_fun(*this, &ExcaliburWindow::on_bind_constraint), false);
+        factory->signal_unbind().connect(
+            sigc::mem_fun(*this, &ExcaliburWindow::on_unbind_constraint), false);
+        constraints_view.set_factory(factory);
+    }
 
     void on_action_table_file_open() {
         auto file_dialog = Gtk::FileDialog::create();
@@ -400,6 +534,50 @@ public:
             return;
         }
         mitem->set_widget_loaded(column, false);
+    }
+
+    void on_setup_constraint(const Glib::RefPtr<Gtk::ListItem> &list_item) {
+        auto button = Gtk::make_managed<Gtk::Button>();
+        auto label = Gtk::make_managed<Gtk::Label>();
+        label->set_halign(Gtk::Align::START);
+        button->set_child(*label);
+        list_item->set_child(*button);
+
+        button->signal_clicked().connect(
+            sigc::bind<0>(
+                sigc::mem_fun(*this, &ExcaliburWindow::on_constraint_clicked),
+                        list_item));
+    }
+
+    void on_bind_constraint(const Glib::RefPtr<Gtk::ListItem> &list_item) {
+        auto item = list_item->get_item();
+        auto mitem = dynamic_cast<constraint_object<BlueprintFieldType>*>(&*item);
+        if (!mitem) {
+            return;
+        }
+        auto button = dynamic_cast<Gtk::Button*>(list_item->get_child());
+        if (!button) {
+            return;
+        }
+        auto label = dynamic_cast<Gtk::Label*>(button->get_child());
+        if (!label) {
+            return;
+        }
+        label->set_text(mitem->to_string());
+        if (mitem->is_selected()) {
+            button->add_css_class("selected");
+        }
+        mitem->loaded = true;
+        mitem->button = button;
+    }
+
+    void on_unbind_constraint(const Glib::RefPtr<Gtk::ListItem> &list_item) {
+        auto item = list_item->get_item();
+        auto mitem = dynamic_cast<constraint_object<BlueprintFieldType>*>(&*item);
+        if (!mitem) {
+            return;
+        }
+        mitem->loaded = false;
     }
 
     void on_table_file_open_dialog_response(Glib::RefPtr<Gtk::FileDialog> file_dialog,
@@ -489,6 +667,19 @@ public:
             }
 
         };
+        // Carefully remove the already existing columns
+        while (table_view.get_columns()->get_n_items() != 0) {
+            auto current_columns = table_view.get_columns();
+            table_view.remove_column(
+                std::dynamic_pointer_cast<Gtk::ColumnViewColumn>(current_columns->get_object(0)));
+        }
+        // Clear selections as they are no longer relevant
+        selected_cell.clear();
+        selected_constraint.clear();
+        // Clear constraint view
+        auto constraint_store = Gio::ListStore<constraint_object<BlueprintFieldType>>::create();
+        setup_constraint_view_from_store(constraint_store);
+
         for (std::size_t i = 0; i < column_size + 1; i++) {
             auto factory = Gtk::SignalListItemFactory::create();
             factory->signal_setup().connect(
@@ -500,17 +691,21 @@ public:
 
             auto column = Gtk::ColumnViewColumn::create(get_column_name(sizes, i), factory);
             column->set_resizable(true);
-            table.append_column(column);
+            table_view.append_column(column);
         }
 
         auto model = Gtk::NoSelection::create(store);
-        table.set_model(model);
+        table_view.set_model(model);
     }
 
     void on_circuit_file_open_dialog_response(Glib::RefPtr<Gtk::FileDialog> file_dialog,
                                               std::shared_ptr<Gio::AsyncResult> &res) {
 
         auto result = file_dialog->open_finish(res);
+        if (table_view.get_columns()->get_n_items() == 0) {
+            std::cerr << "Please open the table before opening the circuit!" << std::endl;
+            return;
+        }
         auto stream = result->read();
         auto file_info = result->query_info();
         auto file_size = file_info->get_size();
@@ -609,12 +804,32 @@ public:
         }
 
         delete[] buffer;
+
+        // Constraint cache building
+        auto selection_model = dynamic_cast<Gtk::NoSelection*>(&*table_view.get_model());
+        if (!selection_model) {
+            std::cerr << "Failed to get selection model" << std::endl;
+            return;
+        }
+        auto model = selection_model->get_model();
+        for (std::size_t i = 0; i < circuit.sizes.copy_constraints_size; i++) {
+            auto constraint = &circuit.copy_constraints[i];
+            std::array<var, 2> variables = {constraint->first, constraint->second};
+            for (auto &variable : variables) {
+                auto row = dynamic_cast<row_object<BlueprintFieldType>*>(&*model->get_object(variable.rotation));
+                row->add_copy_constraint_to_cache(variable, i, constraint, sizes);
+            }
+        }
     }
 
     void on_table_file_save_dialog_response(Glib::RefPtr<Gtk::FileDialog> file_dialog,
                                             bool wide_export,
                                             std::shared_ptr<Gio::AsyncResult> &res) {
         auto result = file_dialog->save_finish(res);
+        if (table_view.get_columns()->get_n_items() == 0) {
+            std::cerr << "No table to save" << std::endl;
+            return;
+        }
         auto stream = result->replace();
         if (stream->is_closed()) {
             std::cerr << "Failed to open the file for writing" << std::endl;
@@ -626,9 +841,9 @@ public:
                << " constants_size: " << sizes.constants_size << " selectors_size: " << sizes.selectors_size
                << " max_size: " << sizes.max_size << "\n";
         stream->write(header.str().c_str(), header.str().size());
-        auto model = dynamic_cast<Gtk::NoSelection*>(&*table.get_model());
+        auto model = dynamic_cast<Gtk::NoSelection*>(&*table_view.get_model());
         if (!model) {
-            std::cout << "No model" << std::endl;
+            std::cerr << "No model" << std::endl;
             stream->close();
             return;
         }
@@ -640,13 +855,13 @@ public:
             row_stream << std::hex << std::setfill('0');
             auto object_row = model->get_object(i);
             if (!object_row) {
-                std::cout << "No object" << std::endl;
+                std::cerr << "No object" << std::endl;
                 stream->close();
                 return;
             }
             auto row = dynamic_cast<row_object<BlueprintFieldType>*>(&*object_row);
             if (!row) {
-                std::cout << "No row" << std::endl;
+                std::cerr << "No row" << std::endl;
                 stream->close();
                 return;
             }
@@ -687,10 +902,10 @@ public:
             return;
         }
 
-        if (selected_cell.row_object != nullptr) {
-            auto old_row = selected_cell.row_object;
+        if (selected_cell.tracked_object != nullptr) {
+            auto old_row = selected_cell.tracked_object;
             CellState& old_row_state = old_row->get_cell_state(selected_cell.column);
-            old_row_state.unselect();
+            old_row_state.deselect();
             if (old_row->get_widget_loaded(selected_cell.column)) {
                 auto button = old_row->get_widget(selected_cell.column);
                 button->remove_css_class("selected");
@@ -699,18 +914,55 @@ public:
 
         selected_cell.row = row;
         selected_cell.column = column;
-        selected_cell.row_object = mitem;
+        selected_cell.tracked_object = mitem;
 
         button->add_css_class("selected");
         CellState& row_state = mitem->get_cell_state(column);
         row_state.select();
 
         element_entry.set_text(mitem->to_string(column));
+
+        if (selected_constraint.tracked_object != nullptr) {
+            selected_constraint.tracked_object->deselect();
+            selected_constraint.tracked_object = nullptr;
+        }
+
+        auto store = Gio::ListStore<constraint_object<BlueprintFieldType>>::create();
+        for (std::size_t i = 0; i < mitem->get_copy_constraints_size(column); i++) {
+            auto constraint = mitem->get_copy_constraint(column, i);
+            store->append(constraint_object<BlueprintFieldType>::create(constraint.second));
+        }
+        setup_constraint_view_from_store(store);
+    }
+
+    void on_constraint_clicked(const Glib::RefPtr<Gtk::ListItem> &list_item) {
+        auto item = list_item->get_item();
+        auto mitem = dynamic_cast<constraint_object<BlueprintFieldType>*>(&*item);
+        if (selected_constraint.tracked_object == mitem) {
+            return;
+        }
+        if (!mitem) {
+            return;
+        }
+        auto button = dynamic_cast<Gtk::Button*>(&*list_item->get_child());
+
+        if (selected_constraint.tracked_object != nullptr) {
+            auto old_constraint = selected_constraint.tracked_object;
+            CellState &old_constraint_state = old_constraint->state;
+            old_constraint_state.deselect();
+            if (old_constraint->loaded) {
+                old_constraint->button->remove_css_class("selected");
+            }
+        }
+
+        button->add_css_class("selected");
+
+        selected_constraint.tracked_object = mitem;
     }
 
     void on_entry_key_released(guint keyval, guint keycode, Gdk::ModifierType state) {
         // Didn't select any cell or keyval != enter
-        if (keyval != 65293 || selected_cell.row_object == nullptr) {
+        if (keyval != 65293 || selected_cell.tracked_object == nullptr) {
             return;
         }
         std::stringstream ss;
@@ -722,21 +974,21 @@ public:
             return;
         }
         value_type value = integral_value;
-        auto selection_model = table.get_model();
+        auto selection_model = table_view.get_model();
         auto model = dynamic_cast<Gtk::NoSelection*>(&*selection_model);
         if (!model) {
-            std::cout << "No model" << std::endl;
+            std::cerr << "No model" << std::endl;
             return;
         }
 
         auto object_row = model->get_object(selected_cell.row);
         if (!object_row) {
-            std::cout << "No object" << std::endl;
+            std::cerr << "No object" << std::endl;
             return;
         }
         auto row = dynamic_cast<row_object<BlueprintFieldType>*>(&*object_row);
         if (!row) {
-            std::cout << "Failed cast to row" << std::endl;
+            std::cerr << "Failed cast to row" << std::endl;
             return;
         }
         row->set_row_item(value, selected_cell.column);
@@ -745,7 +997,7 @@ public:
             auto button = row->get_widget(selected_cell.column);
             auto label = dynamic_cast<Gtk::Label*>(&*button->get_child());
             if (!label) {
-                std::cout << "Failed cast to label" << std::endl;
+                std::cerr << "Failed cast to label" << std::endl;
                 return;
             }
             label->set_text(element_entry.get_text());
@@ -756,10 +1008,13 @@ protected:
     Gtk::Entry element_entry;
     Gtk::Box vbox_prime, vbox_controls;
     Gtk::ScrolledWindow table_window;
-    Gtk::ColumnView table;
+    Gtk::ColumnView table_view;
     Gtk::Button open_table_button, open_circuit_button, save_table_button;
+    Gtk::ListView constraints_view;
+    Gtk::ScrolledWindow constraints_window;
 private:
     table_sizes sizes;
-    CellTracker<Gtk::Button, BlueprintFieldType> selected_cell;
+    CellTracker<Gtk::Button, row_object<BlueprintFieldType>> selected_cell;
+    CellTracker<Gtk::Button, constraint_object<BlueprintFieldType>> selected_constraint;
     circuit_container<BlueprintFieldType> circuit;
 };
