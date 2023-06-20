@@ -128,7 +128,9 @@ struct CellState {
     CellState(uint8_t state_) : state(state_) {}
     enum CellStateFlags : uint8_t {
         NORMAL = 0,
-        SELECTED = 1 << 1
+        SELECTED = 1 << 1,
+        COPY_CONSTRAINED_SATISFIED = 1 << 2,
+        COPY_CONSTRAINED_FAILURE = 1 << 3,
     };
 
     void select() {
@@ -141,6 +143,26 @@ struct CellState {
 
     bool is_selected() const {
         return state & SELECTED;
+    }
+
+    void remove_copy_constraint_state() {
+        state &= ~(COPY_CONSTRAINED_SATISFIED | COPY_CONSTRAINED_FAILURE);
+    }
+
+    void copy_constraint_satisfied() {
+        state |= COPY_CONSTRAINED_SATISFIED;
+    }
+
+    bool is_copy_constraint_satisfied() const {
+        return state & COPY_CONSTRAINED_SATISFIED;
+    }
+
+    void copy_constraint_unsatisfied() {
+        state |= COPY_CONSTRAINED_FAILURE;
+    }
+
+    bool is_copy_constraint_unsatisfied() const {
+        return state & COPY_CONSTRAINED_FAILURE;
     }
 
     uint8_t state;
@@ -357,10 +379,11 @@ struct constraint_object : public Glib::Object {
 template<typename WidgetType, typename TrackedType>
 struct CellTracker {
     CellTracker() : row(-1), column(-1), tracked_object(nullptr) {}
+    CellTracker(std::size_t row_, std::size_t column_, TrackedType* tracked_object_) :
+        row(row_), column(column_), tracked_object(tracked_object_) {}
 
     void clear() {
-        row = -1;
-        column = -1;
+        row = column = -1;
         tracked_object = nullptr;
     }
 
@@ -390,8 +413,10 @@ public:
         Glib::ustring css_style =
             "* { font: 24px Courier; border-radius: unset }"
             "button { margin: 0px; padding: 0px; }"
-            "button.selected { background: deepskyblue; }"
-            "button.crimson { background: crimson; }";
+            "button.selected, button.selected.copy_unsatisfied, button.selected.copy_unsatisfied \
+             { background: deepskyblue; }"
+            "button.copy_satisfied { background: #58D68D; }"
+            "button.copy_unsatisfied { background: crimson; }";
         css_provider->load_from_data(css_style);
         Gtk::StyleProvider::add_provider_for_display(
             Gdk::Display::get_default(), css_provider, GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
@@ -452,6 +477,71 @@ public:
         factory->signal_unbind().connect(
             sigc::mem_fun(*this, &ExcaliburWindow::on_unbind_constraint), false);
         constraints_view.set_factory(factory);
+    }
+
+    void clear_highlights() {
+        for (auto &cell : highlighted_cells) {
+            auto row = cell.tracked_object;
+            CellState &row_state = row->get_cell_state(cell.column);
+            row_state.remove_copy_constraint_state();
+            if (row->get_widget_loaded(cell.column)) {
+                auto button = row->get_widget(cell.column);
+                button->remove_css_class("copy_satisfied");
+                button->remove_css_class("copy_unsatisfied");
+            }
+        }
+    }
+
+    void highlight_constraint(constraint_object<BlueprintFieldType>* constraint_item) {
+        auto selection_model = dynamic_cast<Gtk::NoSelection*>(&*table_view.get_model());
+        auto model = selection_model->get_model();
+        auto constraint = constraint_item->constraint;
+        if (constraint.which() == 0) { // gate constraint
+            // TODO
+        } else if (constraint.which() == 1) { // copy constraint
+            auto copy_constraint =
+                boost::get<nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>*>(constraint);
+            std::array<nil::crypto3::zk::snark::plonk_variable<BlueprintFieldType>, 2> vars =
+                {copy_constraint->first, copy_constraint->second};
+            std::array<typename BlueprintFieldType::value_type, 2> values;
+            for (std::size_t i = 0; i < 2; i++) {
+                auto row_index = vars[i].rotation;
+                auto row = dynamic_cast<row_object<BlueprintFieldType>*>(&*model->get_object(row_index));
+                if (!row) {
+                    std::cerr << "Failed to get row" << std::endl;
+                    return;
+                }
+                auto column = row->get_actual_column_index(vars[i], sizes);
+                values[i] = row->get_row_item(column);
+            }
+            for (std::size_t i = 0; i < 2; i++) {
+                auto row_index = vars[i].rotation;
+                auto row = dynamic_cast<row_object<BlueprintFieldType>*>(&*model->get_object(row_index));
+                if (!row) {
+                    std::cerr << "Failed to get row" << std::endl;
+                    return;
+                }
+                auto column = row->get_actual_column_index(vars[i], sizes);
+                CellState &row_state = row->get_cell_state(column);
+                if (values[0] == values[1]) {
+                    row_state.copy_constraint_satisfied();
+                    if (row->get_widget_loaded(column)) {
+                        auto button = row->get_widget(column);
+                        button->add_css_class("copy_satisfied");
+                    }
+                } else {
+                    row_state.copy_constraint_unsatisfied();
+                    if (row->get_widget_loaded(column)) {
+                        auto button = row->get_widget(column);
+                        button->add_css_class("copy_unsatisfied");
+                    }
+                }
+                highlighted_cells.push_back(CellTracker<Gtk::Button, row_object<BlueprintFieldType>>(
+                    vars[i].rotation, column, row));
+            }
+        } else {
+            std::cerr << "Unimplemented constraint type" << std::endl;
+        }
     }
 
     void on_action_table_file_open() {
@@ -524,6 +614,12 @@ public:
         CellState state = mitem->get_cell_state(column);
         if (state.is_selected()) {
             button->add_css_class("selected");
+        }
+        if (state.is_copy_constraint_satisfied()) {
+            button->add_css_class("copy-satisfied");
+        }
+        if (state.is_copy_constraint_unsatisfied()) {
+            button->add_css_class("copy-unsatisfied");
         }
     }
 
@@ -917,10 +1013,12 @@ public:
         selected_cell.tracked_object = mitem;
 
         button->add_css_class("selected");
-        CellState& row_state = mitem->get_cell_state(column);
+        CellState &row_state = mitem->get_cell_state(column);
         row_state.select();
 
         element_entry.set_text(mitem->to_string(column));
+
+        clear_highlights();
 
         if (selected_constraint.tracked_object != nullptr) {
             selected_constraint.tracked_object->deselect();
@@ -958,6 +1056,9 @@ public:
         button->add_css_class("selected");
 
         selected_constraint.tracked_object = mitem;
+
+        clear_highlights();
+        highlight_constraint(mitem);
     }
 
     void on_entry_key_released(guint keyval, guint keycode, Gdk::ModifierType state) {
@@ -1002,6 +1103,11 @@ public:
             }
             label->set_text(element_entry.get_text());
         }
+
+        if (selected_constraint.tracked_object != nullptr) {
+            clear_highlights();
+            highlight_constraint(selected_constraint.tracked_object);
+        }
     }
 
 protected:
@@ -1016,5 +1122,6 @@ private:
     table_sizes sizes;
     CellTracker<Gtk::Button, row_object<BlueprintFieldType>> selected_cell;
     CellTracker<Gtk::Button, constraint_object<BlueprintFieldType>> selected_constraint;
+    std::vector<CellTracker<Gtk::Button, row_object<BlueprintFieldType>>> highlighted_cells;
     circuit_container<BlueprintFieldType> circuit;
 };
