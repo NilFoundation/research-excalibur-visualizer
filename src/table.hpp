@@ -32,6 +32,7 @@
 #include <sstream>
 #include <vector>
 #include <utility>
+#include <set>
 
 #include <boost/spirit/include/qi.hpp>
 #include <boost/phoenix/phoenix.hpp>
@@ -69,6 +70,7 @@
 #include <nil/crypto3/zk/snark/arithmetization/plonk/constraint.hpp>
 #include <nil/crypto3/zk/math/expression.hpp>
 #include <nil/crypto3/zk/snark/arithmetization/plonk/variable.hpp>
+#include <nil/crypto3/zk/math/expression_visitors.hpp>
 
 #include "parsers.hpp"
 
@@ -131,6 +133,10 @@ struct CellState {
         SELECTED = 1 << 1,
         COPY_CONSTRAINED_SATISFIED = 1 << 2,
         COPY_CONSTRAINED_FAILURE = 1 << 3,
+        GATE_CONSTRAINED_SATISFIED = 1 << 4,
+        GATE_CONSTRAINED_FAILURE = 1 << 5,
+        LOOKUP_CONSTRAINED_SATISFIED = 1 << 6,
+        LOOKUP_CONSTRAINED_FAILURE = 1 << 7
     };
 
     void select() {
@@ -151,6 +157,7 @@ struct CellState {
 
     void copy_constraint_satisfied() {
         state |= COPY_CONSTRAINED_SATISFIED;
+        state &= ~COPY_CONSTRAINED_FAILURE;
     }
 
     bool is_copy_constraint_satisfied() const {
@@ -159,10 +166,29 @@ struct CellState {
 
     void copy_constraint_unsatisfied() {
         state |= COPY_CONSTRAINED_FAILURE;
+        state &= ~COPY_CONSTRAINED_SATISFIED;
     }
 
     bool is_copy_constraint_unsatisfied() const {
         return state & COPY_CONSTRAINED_FAILURE;
+    }
+
+    void remove_gate_constraint_state() {
+        state &= ~(GATE_CONSTRAINED_SATISFIED | GATE_CONSTRAINED_FAILURE);
+    }
+
+    void gate_constraint_satisfied() {
+        state |= GATE_CONSTRAINED_SATISFIED;
+        state &= ~GATE_CONSTRAINED_FAILURE;
+    }
+
+    void gate_constraint_unsatisfied() {
+        state |= GATE_CONSTRAINED_FAILURE;
+        state &= ~GATE_CONSTRAINED_SATISFIED;
+    }
+
+    bool is_gate_constraint_satisfied() const {
+        return state & GATE_CONSTRAINED_SATISFIED;
     }
 
     uint8_t state;
@@ -246,9 +272,9 @@ public:
             case var::column_type::constant:
                 return variable.index + 1 + sizes.witnesses_size + sizes.public_inputs_size;
                 break;
-            default:
-                std::cerr << "Attempted to add copy constraint to selector column" << std::endl;
-                return -1;
+            case var::column_type::selector:
+                return variable.index + 1 + sizes.witnesses_size + sizes.public_inputs_size + sizes.constants_size;
+                break;
         }
     }
 
@@ -272,12 +298,50 @@ public:
         return copy_constraints_cache[column_index][index];
     }
 
+    std::size_t get_constraints_size(std::size_t column_index) const {
+        return constraints_cache[column_index].size();
+    }
+
+    std::tuple<std::size_t, std::size_t, plonk_constraint_type*> get_constraint(std::size_t column_index,
+                                                                                std::size_t index) const {
+        return constraints_cache[column_index][index];
+    }
+
+    void add_constraint_to_cache(row_object<BlueprintFieldType>* previous_row,
+                                 row_object<BlueprintFieldType>* next_row,
+                                 var variable, std::size_t selector, std::size_t constraint_num,
+                                 plonk_constraint_type* constraint, table_sizes &sizes) {
+        if (variable.rotation == 1) {
+            variable.rotation = 0;
+            if (next_row == nullptr) {
+                std::cerr << "Attempted to add constraint to non-existent row" << std::endl;
+                return;
+            }
+            next_row->add_constraint_to_cache(nullptr, nullptr, variable, selector, constraint_num, constraint, sizes);
+            return;
+        } else if (variable.rotation == -1) {
+            variable.rotation = 0;
+            if (previous_row == nullptr) {
+                std::cerr << "Attempted to add constraint to non-existent row" << std::endl;
+                return;
+            }
+            previous_row->add_constraint_to_cache(nullptr, nullptr, variable, selector,
+                                                  constraint_num, constraint, sizes);
+            return;
+        }
+        std::size_t actual_column_index = get_actual_column_index(variable, sizes);
+        constraints_cache[actual_column_index].push_back(std::make_tuple(selector, constraint_num, constraint));
+    }
+
+    bool selector_enabled(std::size_t selector_num, table_sizes &sizes) {
+        return row[1 + sizes.witnesses_size + sizes.public_inputs_size + sizes.constants_size + selector_num] != 0;
+    }
+
 protected:
     row_object(const std::vector<integral_type>& row_, std::size_t row_index_) :
             row_index(row_index_), cell_states(row_.size(), CellState::CellStateFlags::NORMAL),
             widgets(row_.size(), nullptr), widget_loaded(row_.size(), false),
-            copy_constraints_cache(row_.size()),
-            constraints_cache(row_.size(), std::vector<std::pair<std::size_t, plonk_constraint_type*>>(0)) {
+            copy_constraints_cache(row_.size()), constraints_cache(row_.size()) {
         row.reserve(row_.size());
         std::copy(row_.begin(), row_.end(), std::back_inserter(row));
         string_cache.reserve(row.size());
@@ -299,8 +363,8 @@ private:
     // Stores all copy constraints which affect the i'th item
     // The size element in pair is for constraint num in container.
     std::vector<std::vector<std::pair<std::size_t, plonk_copy_constraint_type*>>> copy_constraints_cache;
-    // Stores all constraints which affect the i'th item, with their selectors
-    std::vector<std::vector<std::pair<std::size_t, plonk_constraint_type*>>> constraints_cache;
+    // Stores all constraints which affect the i'th item, with their selectors and constraint numbers.
+    std::vector<std::vector<std::tuple<std::size_t, std::size_t, plonk_constraint_type*>>> constraints_cache;
     std::size_t row_index;
     std::vector<CellState> cell_states;
     std::vector<Gtk::Button*> widgets;
@@ -332,20 +396,24 @@ struct constraint_object : public Glib::Object {
     using plonk_constraint_type = nil::crypto3::zk::snark::plonk_constraint<BlueprintFieldType>;
     using plonk_copy_constraint_type = nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>;
 
-    static Glib::RefPtr<constraint_object> create(plonk_constraint_type* constraint_) {
-        return Glib::make_refptr_for_instance<constraint_object>(new constraint_object(constraint_));
+    static Glib::RefPtr<constraint_object> create(plonk_constraint_type* constraint_,
+                                                  std::size_t selector, std::size_t num) {
+        return Glib::make_refptr_for_instance<constraint_object>(
+            new constraint_object(constraint_, selector, num));
     }
 
     static Glib::RefPtr<constraint_object> create(plonk_copy_constraint_type* constraint_) {
         return Glib::make_refptr_for_instance<constraint_object>(new constraint_object(constraint_));
     }
 
-    constraint_object(plonk_constraint_type* constraint_) : constraint(constraint_), button(nullptr),
-                                                            loaded(false) {
+    constraint_object(plonk_constraint_type* constraint_, std::size_t selector, std::size_t num) :
+            constraint(constraint_), button(nullptr), loaded(false) {
         std::stringstream ss;
-        ss << constraint_;
+        ss << "cons " << selector << " " << num << ": ";
+        ss << *constraint_;
         cached_string = ss.str();
     }
+
     constraint_object(plonk_copy_constraint_type* constraint_) : constraint(constraint_), button(nullptr),
                                                                  loaded(false) {
         std::stringstream ss;
@@ -916,6 +984,39 @@ public:
                 row->add_copy_constraint_to_cache(variable, i, constraint, sizes);
             }
         }
+        // Gate cache building
+        for (std::size_t i = 0; i < circuit.sizes.gates_size; i++) {
+            auto gate = &circuit.gates[i];
+            for (std::size_t j = 0; j < gate->constraints.size(); j++) {
+                std::set<var> variable_set;
+                std::function<void(var)> variable_extractor =
+                    [&variable_set](var variable) { variable_set.insert(variable); };
+                nil::crypto3::math::expression_for_each_variable_visitor<var> visitor(variable_extractor);
+                visitor.visit(gate->constraints[j]);
+
+                row_object<BlueprintFieldType> *previous_row = nullptr, *current_row = nullptr, *next_row = nullptr;
+                current_row = dynamic_cast<row_object<BlueprintFieldType>*>(&*model->get_object(0));
+                next_row = (sizes.max_size > 1) ?
+                    dynamic_cast<row_object<BlueprintFieldType>*>(&*model->get_object(1))
+                    : nullptr;
+                for (std::size_t k = 0; k < sizes.max_size;
+                     k++, previous_row = current_row, current_row = next_row,
+                        next_row = (k + 1 < sizes.max_size) ?
+                            dynamic_cast<row_object<BlueprintFieldType>*>(&*model->get_object(k + 1))
+                            : nullptr) {
+                    if (!current_row->selector_enabled(gate->selector_index, sizes)) {
+                        continue;
+                    }
+                    for (auto &variable : variable_set) {
+                        current_row->add_constraint_to_cache(previous_row, next_row, variable,
+                                                             i, j, &gate->constraints[j], sizes);
+                    }
+                    var selector = var(0, gate->selector_index, false, var::column_type::selector);
+                    current_row->add_constraint_to_cache(nullptr, nullptr, selector,
+                                                         i, j, &gate->constraints[j], sizes);
+                }
+            }
+        }
     }
 
     void on_table_file_save_dialog_response(Glib::RefPtr<Gtk::FileDialog> file_dialog,
@@ -1027,8 +1128,13 @@ public:
 
         auto store = Gio::ListStore<constraint_object<BlueprintFieldType>>::create();
         for (std::size_t i = 0; i < mitem->get_copy_constraints_size(column); i++) {
-            auto constraint = mitem->get_copy_constraint(column, i);
-            store->append(constraint_object<BlueprintFieldType>::create(constraint.second));
+            auto copy_constraint = mitem->get_copy_constraint(column, i);
+            store->append(constraint_object<BlueprintFieldType>::create(copy_constraint.second));
+        }
+        for (std::size_t i = 0; i < mitem->get_constraints_size(column); i++) {
+            auto constraint = mitem->get_constraint(column, i);
+            store->append(constraint_object<BlueprintFieldType>::create(
+                std::get<2>(constraint), std::get<0>(constraint), std::get<1>(constraint)));
         }
         setup_constraint_view_from_store(store);
     }
