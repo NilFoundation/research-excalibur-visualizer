@@ -33,6 +33,7 @@
 #include <vector>
 #include <utility>
 #include <set>
+#include <map>
 
 #include <boost/spirit/include/qi.hpp>
 #include <boost/phoenix/phoenix.hpp>
@@ -139,6 +140,10 @@ struct CellState {
         LOOKUP_CONSTRAINED_FAILURE = 1 << 7
     };
 
+    void clear() {
+        state = NORMAL;
+    }
+
     void select() {
         state |= SELECTED;
     }
@@ -191,7 +196,26 @@ struct CellState {
         return state & GATE_CONSTRAINED_SATISFIED;
     }
 
+    bool is_gate_constraint_unsatisfied() const {
+        return state & GATE_CONSTRAINED_FAILURE;
+    }
+
     uint8_t state;
+};
+
+template<typename BlueprintFieldType>
+struct cached_constraint {
+    using plonk_constraint_type = nil::crypto3::zk::snark::plonk_constraint<BlueprintFieldType>;
+
+    cached_constraint() : constraint(nullptr), row(0), selector(0), constraint_num(0) {}
+    cached_constraint(plonk_constraint_type* constraint_, std::size_t row_,
+                      std::size_t selector_, std::size_t constraint_num_)
+        : constraint(constraint_), row(row_), selector(selector_), constraint_num(constraint_num_) {}
+
+    plonk_constraint_type* constraint;
+    std::size_t row;
+    std::size_t selector;
+    std::size_t constraint_num;
 };
 
 template <typename BlueprintFieldType>
@@ -302,14 +326,13 @@ public:
         return constraints_cache[column_index].size();
     }
 
-    std::tuple<std::size_t, std::size_t, plonk_constraint_type*> get_constraint(std::size_t column_index,
-                                                                                std::size_t index) const {
+    cached_constraint<BlueprintFieldType> get_constraint(std::size_t column_index, std::size_t index) const {
         return constraints_cache[column_index][index];
     }
 
     void add_constraint_to_cache(row_object<BlueprintFieldType>* previous_row,
                                  row_object<BlueprintFieldType>* next_row,
-                                 var variable, std::size_t selector, std::size_t constraint_num,
+                                 var variable, std::size_t selector, std::size_t constraint_num, std::size_t row,
                                  plonk_constraint_type* constraint, table_sizes &sizes) {
         if (variable.rotation == 1) {
             variable.rotation = 0;
@@ -317,7 +340,7 @@ public:
                 std::cerr << "Attempted to add constraint to non-existent row" << std::endl;
                 return;
             }
-            next_row->add_constraint_to_cache(nullptr, nullptr, variable, selector, constraint_num, constraint, sizes);
+            next_row->add_constraint_to_cache(nullptr, nullptr, variable, selector, constraint_num, row, constraint, sizes);
             return;
         } else if (variable.rotation == -1) {
             variable.rotation = 0;
@@ -326,11 +349,12 @@ public:
                 return;
             }
             previous_row->add_constraint_to_cache(nullptr, nullptr, variable, selector,
-                                                  constraint_num, constraint, sizes);
+                                                  constraint_num, row, constraint, sizes);
             return;
         }
         std::size_t actual_column_index = get_actual_column_index(variable, sizes);
-        constraints_cache[actual_column_index].push_back(std::make_tuple(selector, constraint_num, constraint));
+        constraints_cache[actual_column_index].push_back(
+            cached_constraint<BlueprintFieldType>(constraint, row, selector, constraint_num));
     }
 
     bool selector_enabled(std::size_t selector_num, table_sizes &sizes) {
@@ -364,7 +388,7 @@ private:
     // The size element in pair is for constraint num in container.
     std::vector<std::vector<std::pair<std::size_t, plonk_copy_constraint_type*>>> copy_constraints_cache;
     // Stores all constraints which affect the i'th item, with their selectors and constraint numbers.
-    std::vector<std::vector<std::tuple<std::size_t, std::size_t, plonk_constraint_type*>>> constraints_cache;
+    std::vector<std::vector<cached_constraint<BlueprintFieldType>>> constraints_cache;
     std::size_t row_index;
     std::vector<CellState> cell_states;
     std::vector<Gtk::Button*> widgets;
@@ -396,18 +420,18 @@ struct constraint_object : public Glib::Object {
     using plonk_constraint_type = nil::crypto3::zk::snark::plonk_constraint<BlueprintFieldType>;
     using plonk_copy_constraint_type = nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>;
 
-    static Glib::RefPtr<constraint_object> create(plonk_constraint_type* constraint_,
+    static Glib::RefPtr<constraint_object> create(plonk_constraint_type* constraint_, std::size_t row_,
                                                   std::size_t selector, std::size_t num) {
         return Glib::make_refptr_for_instance<constraint_object>(
-            new constraint_object(constraint_, selector, num));
+            new constraint_object(constraint_, row_, selector, num));
     }
 
     static Glib::RefPtr<constraint_object> create(plonk_copy_constraint_type* constraint_) {
         return Glib::make_refptr_for_instance<constraint_object>(new constraint_object(constraint_));
     }
 
-    constraint_object(plonk_constraint_type* constraint_, std::size_t selector, std::size_t num) :
-            constraint(constraint_), button(nullptr), loaded(false) {
+    constraint_object(plonk_constraint_type* constraint_, std::size_t row_, std::size_t selector, std::size_t num) :
+            constraint(constraint_), button(nullptr), loaded(false), row(row_) {
         std::stringstream ss;
         ss << "cons " << selector << " " << num << ": ";
         ss << *constraint_;
@@ -415,7 +439,7 @@ struct constraint_object : public Glib::Object {
     }
 
     constraint_object(plonk_copy_constraint_type* constraint_) : constraint(constraint_), button(nullptr),
-                                                                 loaded(false) {
+                                                                 loaded(false), row(-1) {
         std::stringstream ss;
         ss << "copy " << constraint_->first << " " << constraint_->second;
         cached_string = ss.str();
@@ -441,6 +465,8 @@ struct constraint_object : public Glib::Object {
     Glib::ustring cached_string;
     CellState state;
     bool loaded;
+    // Used for gate constraints to access the correct row for highlighting.
+    std::size_t row;
     Gtk::Button* button;
 };
 
@@ -481,10 +507,11 @@ public:
         Glib::ustring css_style =
             "* { font: 24px Courier; border-radius: unset }"
             "button { margin: 0px; padding: 0px; }"
-            "button.selected, button.selected.copy_unsatisfied, button.selected.copy_unsatisfied \
-             { background: deepskyblue; }"
+            "button.selected { background: deepskyblue; }"
             "button.copy_satisfied { background: #58D68D; }"
-            "button.copy_unsatisfied { background: crimson; }";
+            "button.copy_unsatisfied { background: crimson; }"
+            "button.gate_satisfied { background: limegreen; }"
+            "button.gate_unsatisfied { background: darkred; }";
         css_provider->load_from_data(css_style);
         Gtk::StyleProvider::add_provider_for_display(
             Gdk::Display::get_default(), css_provider, GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
@@ -556,6 +583,8 @@ public:
                 auto button = row->get_widget(cell.column);
                 button->remove_css_class("copy_satisfied");
                 button->remove_css_class("copy_unsatisfied");
+                button->remove_css_class("gate_satisfied");
+                button->remove_css_class("gate_unsatisfied");
             }
         }
     }
@@ -565,7 +594,58 @@ public:
         auto model = selection_model->get_model();
         auto constraint = constraint_item->constraint;
         if (constraint.which() == 0) { // gate constraint
-            // TODO
+            std::size_t row_idx = constraint_item->row;
+            auto gate_constraint =
+                boost::get<nil::crypto3::zk::snark::plonk_constraint<BlueprintFieldType>*>(constraint);
+            auto previous_row = (row_idx > 0) ?
+                dynamic_cast<row_object<BlueprintFieldType>*>(&*model->get_object(row_idx - 1))
+                : nullptr;
+            auto curent_row = dynamic_cast<row_object<BlueprintFieldType>*>(&*model->get_object(row_idx));
+            auto next_row = (row_idx < sizes.max_size) ?
+                dynamic_cast<row_object<BlueprintFieldType>*>(&*model->get_object(row_idx + 1))
+                : nullptr;
+            std::set<var> variable_set;
+            std::function<void(var)> variable_extractor =
+                [&variable_set](var variable) { variable_set.insert(variable); };
+            nil::crypto3::math::expression_for_each_variable_visitor<var> visitor(variable_extractor);
+            visitor.visit(*gate_constraint);
+
+            std::map<std::tuple<std::size_t, int, typename var::column_type>, typename var::assignment_type>
+                evaluation_map;
+            for (const var &variable : variable_set) {
+                row_object<BlueprintFieldType> *var_row = variable.rotation == -1 ? previous_row :
+                                                          variable.rotation == 0 ? curent_row : next_row;
+                std::size_t var_row_idx = variable.rotation == -1 ? row_idx - 1 :
+                                          variable.rotation == 0 ? row_idx : row_idx + 1;
+                auto column = var_row->get_actual_column_index(variable, sizes);
+                evaluation_map[std::make_tuple(variable.index, variable.rotation, variable.type)] =
+                    var_row->get_row_item(column);
+            }
+            bool satisfied = gate_constraint->evaluate(evaluation_map) == 0;
+
+            for (const var &variable : variable_set) {
+                row_object<BlueprintFieldType> *var_row = variable.rotation == -1 ? previous_row :
+                                                          variable.rotation == 0 ? curent_row : next_row;
+                std::size_t var_row_idx = variable.rotation == -1 ? row_idx - 1 :
+                                          variable.rotation == 0 ? row_idx : row_idx + 1;
+                auto column = var_row->get_actual_column_index(variable, sizes);
+                CellState &row_state = var_row->get_cell_state(column);
+                if (satisfied) {
+                    row_state.gate_constraint_satisfied();
+                } else {
+                    row_state.gate_constraint_unsatisfied();
+                }
+                if (var_row->get_widget_loaded(column)) {
+                    auto button = var_row->get_widget(column);
+                    if (satisfied) {
+                        button->add_css_class("gate_satisfied");
+                    } else {
+                        button->add_css_class("gate_unsatisfied");
+                    }
+                }
+                highlighted_cells.push_back(CellTracker<Gtk::Button, row_object<BlueprintFieldType>>(
+                    var_row_idx, column, var_row));
+            }
         } else if (constraint.which() == 1) { // copy constraint
             auto copy_constraint =
                 boost::get<nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>*>(constraint);
@@ -684,10 +764,16 @@ public:
             button->add_css_class("selected");
         }
         if (state.is_copy_constraint_satisfied()) {
-            button->add_css_class("copy-satisfied");
+            button->add_css_class("copy_satisfied");
         }
         if (state.is_copy_constraint_unsatisfied()) {
-            button->add_css_class("copy-unsatisfied");
+            button->add_css_class("copy_unsatisfied");
+        }
+        if (state.is_gate_constraint_satisfied()) {
+            button->add_css_class("gate_satisfied");
+        }
+        if (state.is_gate_constraint_unsatisfied()) {
+            button->add_css_class("gate_unsatisfied");
         }
     }
 
@@ -1007,13 +1093,14 @@ public:
                     if (!current_row->selector_enabled(gate->selector_index, sizes)) {
                         continue;
                     }
+                    auto current_row_idx = current_row->get_row_index();
                     for (auto &variable : variable_set) {
                         current_row->add_constraint_to_cache(previous_row, next_row, variable,
-                                                             i, j, &gate->constraints[j], sizes);
+                                                             i, j, current_row_idx, &gate->constraints[j], sizes);
                     }
                     var selector = var(0, gate->selector_index, false, var::column_type::selector);
                     current_row->add_constraint_to_cache(nullptr, nullptr, selector,
-                                                         i, j, &gate->constraints[j], sizes);
+                                                         i, j, current_row_idx, &gate->constraints[j], sizes);
                 }
             }
         }
@@ -1134,7 +1221,7 @@ public:
         for (std::size_t i = 0; i < mitem->get_constraints_size(column); i++) {
             auto constraint = mitem->get_constraint(column, i);
             store->append(constraint_object<BlueprintFieldType>::create(
-                std::get<2>(constraint), std::get<0>(constraint), std::get<1>(constraint)));
+                constraint.constraint, constraint.row, constraint.selector, constraint.constraint_num));
         }
         setup_constraint_view_from_store(store);
     }
