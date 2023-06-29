@@ -21,7 +21,11 @@
 // SOFTWARE.
 
 #include <gtkmm/application.h>
+
 #include <giomm/menu.h>
+
+#include <glibmm/optioncontext.h>
+#include <glibmm/optiongroup.h>
 
 #include <nil/crypto3/algebra/fields/vesta/base_field.hpp>
 #include <nil/crypto3/algebra/fields/arithmetic_params/vesta.hpp>
@@ -35,7 +39,46 @@
 int main(int argc, char* argv[]) {
     auto app = Gtk::Application::create("foundation.nil.excalibur");
 
-    using curve_type = nil::crypto3::algebra::curves::vesta::base_field_type;
+    using vesta_curve_type = nil::crypto3::algebra::curves::vesta::base_field_type;
+    using pallas_curve_type = nil::crypto3::algebra::curves::pallas::base_field_type;
 
-    return app->make_window_and_run<ExcaliburWindow<curve_type>>(argc, argv);
+    Glib::OptionGroup::vecustrings main_option_vector;
+    Glib::OptionGroup main_group("curves", "Curves", "Curve used in the program");
+
+    // boolean option
+    bool vesta = false, pallas = false;
+    Glib::OptionEntry vesta_entry, pallas_entry;
+
+    vesta_entry.set_long_name("vesta");
+    vesta_entry.set_short_name('v');
+    vesta_entry.set_description("Use Vesta curve");
+    main_group.add_entry(vesta_entry, vesta);
+
+    pallas_entry.set_long_name("pallas");
+    pallas_entry.set_short_name('p');
+    pallas_entry.set_description("Use Pallas curve");
+    main_group.add_entry(pallas_entry, pallas);
+
+    // Add the main group to the context
+    Glib::OptionContext context;
+    context.set_main_group(main_group);
+    context.set_help_enabled(true);
+    context.set_ignore_unknown_options(true);
+    context.parse(argc, argv);
+
+    if (vesta && pallas) {
+        std::cerr << "Error: only one curve can be used at a time." << std::endl;
+        return 1;
+    }
+    if (!vesta && !pallas) {
+        std::cerr << "Error: no curve selected. Use --vesta or --pallas." << std::endl;
+        return 1;
+    }
+
+    if (vesta) {
+        return app->make_window_and_run<ExcaliburWindow<vesta_curve_type>>(argc, argv);
+    }
+    if (pallas) {
+        return app->make_window_and_run<ExcaliburWindow<pallas_curve_type>>(argc, argv);
+    }
 }

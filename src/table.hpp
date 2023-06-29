@@ -1294,7 +1294,9 @@ public:
                 std::cerr << "Failed cast to label" << std::endl;
                 return;
             }
-            label->set_text(element_entry.get_text());
+            std::stringstream sse;
+            sse << std::hex << value.data;
+            label->set_text(sse.str());
         }
 
         if (selected_constraint.tracked_object != nullptr) {

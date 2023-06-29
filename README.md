@@ -15,7 +15,7 @@ Alternatively, run `schema-locator.sh`. If you have multiple versions of gtk4 in
 After finding the file, run `glib-compile-schemas --targetdir=. /path/to/schema/directory`.
 This should create `gschemas.compiled` file in current (build) directory.
 9. Export the `gschemas.compiled` directory via ` export GSETTINGS_SCHEMA_DIR=/path/to/compiled/schema/dir`.
-10. Run `./src/excalibur`.
+10. Run `./src/excalibur --vesta` (or `--pallas`).
 
 # FAQ
 I get the following error while running the tool:
