@@ -337,7 +337,8 @@ public:
         if (variable.rotation == 1) {
             variable.rotation = 0;
             if (next_row == nullptr) {
-                std::cerr << "Attempted to add constraint to non-existent row" << std::endl;
+                std::cerr << "Attempted to add constraint " << constraint_num << " from selector "
+                          << selector << " to non-existent row " << row + 1 << std::endl;
                 return;
             }
             next_row->add_constraint_to_cache(nullptr, nullptr, variable, selector, constraint_num, row, constraint, sizes);
@@ -345,7 +346,8 @@ public:
         } else if (variable.rotation == -1) {
             variable.rotation = 0;
             if (previous_row == nullptr) {
-                std::cerr << "Attempted to add constraint to non-existent row" << std::endl;
+                std::cerr << "Attempted to add constraint " << constraint_num << " from selector "
+                          << selector << " to non-existent row " << row - 1 << std::endl;
                 return;
             }
             previous_row->add_constraint_to_cache(nullptr, nullptr, variable, selector,
@@ -505,7 +507,7 @@ public:
 
         auto css_provider = Gtk::CssProvider::create();
         Glib::ustring css_style =
-            "* { font: 24px Courier; border-radius: unset }"
+            "* { font: 24px Courier; }"
             "button { margin: 0px; padding: 0px; }"
             "button.selected { background: deepskyblue; }"
             "button.copy_satisfied { background: #58D68D; }"
@@ -517,8 +519,8 @@ public:
             Gdk::Display::get_default(), css_provider, GTK_STYLE_PROVIDER_PRIORITY_APPLICATION);
 
         element_entry.set_placeholder_text("00000000000000000000000000000000000000000000000000000000000000");
-        element_entry.set_max_length(64);
-
+        element_entry.set_max_length((BlueprintFieldType::modulus_bits + 3 - 1) / 3);
+        element_entry.set_size_request(800, -1);
         vbox_prime.set_orientation(Gtk::Orientation::VERTICAL);
         vbox_prime.set_spacing(10);
 
@@ -906,7 +908,7 @@ public:
             };
 
             if (i < sizes.witnesses_size + 1) {
-                return "W" + fixed_width_size(i);
+                return "W" + fixed_width_size(i - 1);
             } else if (i < sizes.witnesses_size + sizes.public_inputs_size + 1) {
                 return "P" + fixed_width_size(i - sizes.witnesses_size - 1);
             } else if (i < sizes.witnesses_size + sizes.public_inputs_size + sizes.constants_size + 1) {
@@ -1098,7 +1100,7 @@ public:
                         current_row->add_constraint_to_cache(previous_row, next_row, variable,
                                                              i, j, current_row_idx, &gate->constraints[j], sizes);
                     }
-                    var selector = var(0, gate->selector_index, false, var::column_type::selector);
+                    var selector = var(gate->selector_index, 0, false, var::column_type::selector);
                     current_row->add_constraint_to_cache(nullptr, nullptr, selector,
                                                          i, j, current_row_idx, &gate->constraints[j], sizes);
                 }
