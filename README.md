@@ -31,6 +31,7 @@ Check that you've done steps 8-9 above. Export has to be redone each shell sessi
 
 How do I export my circuit/assignment table?
 
-Use `export_table` in `include/nil/blueprint/blueprint/plonk/assignment.hpp` for exporting the assignment table, and `export_circuit` in `include/nil/blueprint/blueprint/plonk/circuit.hpp` for circuit export. A good place to call that might be `test_plonk_component.hpp`.
+Use `export_table` (defined in `include/nil/blueprint/blueprint/plonk/assignment.hpp`) for exporting the assignment table, and `export_circuit` (defined in in `include/nil/blueprint/blueprint/plonk/circuit.hpp`) for circuit export.
+A good place to call the export functions might be `test_plonk_component.hpp`.
 
 There currently is no compiler integration.
