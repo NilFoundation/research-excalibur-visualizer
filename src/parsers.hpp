@@ -76,7 +76,7 @@ BOOST_FUSION_ADAPT_STRUCT(
 
 template<typename BlueprintFieldType>
 struct var_constructor_impl {
-    using var = nil::crypto3::zk::snark::plonk_variable<BlueprintFieldType>;
+    using var = nil::crypto3::zk::snark::plonk_variable<typename BlueprintFieldType::value_type>;
     typedef var result_type;
 
     template<typename Arg1, typename Arg2, typename Arg3>
@@ -90,7 +90,7 @@ struct var_constructor_impl {
 
 template<typename BlueprintFieldType>
 struct pow_constructor_impl {
-    using var = nil::crypto3::zk::snark::plonk_variable<BlueprintFieldType>;
+    using var = nil::crypto3::zk::snark::plonk_variable<typename BlueprintFieldType::value_type>;
     using expression = nil::crypto3::math::expression<var>;
     using pow_operation = nil::crypto3::math::pow_operation<expression>;
 
@@ -104,7 +104,7 @@ struct pow_constructor_impl {
 
 template<typename BlueprintFieldType>
 struct copy_constraint_constructor {
-    using var = nil::crypto3::zk::snark::plonk_variable<BlueprintFieldType>;
+    using var = nil::crypto3::zk::snark::plonk_variable<typename BlueprintFieldType::value_type>;
     using plonk_copy_constraint_type = nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>;
 
     typedef plonk_copy_constraint_type result_type;
@@ -217,7 +217,7 @@ struct gate_constraint_parser : boost::spirit::qi::grammar<Iterator,
         boost::spirit::qi::ascii::space_type> {
     using plonk_constraint_type = nil::crypto3::zk::snark::plonk_constraint<BlueprintFieldType>;
     using plonk_gate_type = nil::crypto3::zk::snark::plonk_gate<BlueprintFieldType, plonk_constraint_type>;
-    using var = nil::crypto3::zk::snark::plonk_variable<BlueprintFieldType>;
+    using var = nil::crypto3::zk::snark::plonk_variable<typename BlueprintFieldType::value_type>;
     using term = nil::crypto3::math::term<var>;
 
     gate_constraint_parser() : gate_constraint_parser::base_type(start) {
@@ -281,7 +281,7 @@ struct copy_constraint_parser : boost::spirit::qi::grammar<Iterator,
         nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>(),
         boost::spirit::qi::ascii::space_type> {
     using plonk_copy_constraint_type = nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>;
-    using var = nil::crypto3::zk::snark::plonk_variable<BlueprintFieldType>;
+    using var = nil::crypto3::zk::snark::plonk_variable<typename BlueprintFieldType::value_type>;
 
     copy_constraint_parser() : copy_constraint_parser::base_type(start) {
         using boost::spirit::qi::uint_;

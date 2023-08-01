@@ -226,7 +226,7 @@ public:
     using integral_type = typename BlueprintFieldType::integral_type;
     using plonk_copy_constraint_type = nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>;
     using plonk_constraint_type = nil::crypto3::zk::snark::plonk_constraint<BlueprintFieldType>;
-    using var = nil::crypto3::zk::snark::plonk_variable<BlueprintFieldType>;
+    using var = nil::crypto3::zk::snark::plonk_variable<value_type>;
 
     static Glib::RefPtr<row_object> create(const std::vector<integral_type>& row_, std::size_t row_index_) {
         return Glib::make_refptr_for_instance<row_object>(new row_object(row_, row_index_));
@@ -496,7 +496,7 @@ public:
     using plonk_copy_constraint_type = nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>;
     using plonk_constraint_type = nil::crypto3::zk::snark::plonk_constraint<BlueprintFieldType>;
     using plonk_gate_type = nil::crypto3::zk::snark::plonk_gate<BlueprintFieldType, plonk_constraint_type>;
-    using var = nil::crypto3::zk::snark::plonk_variable<BlueprintFieldType>;
+    using var = nil::crypto3::zk::snark::plonk_variable<value_type>;
 
     ExcaliburWindow() : table_view(), element_entry(), vbox_prime(), table_window(), vbox_controls(),
                         open_table_button("Open Table"), save_table_button("Save"),
@@ -651,8 +651,7 @@ public:
         } else if (constraint.which() == 1) { // copy constraint
             auto copy_constraint =
                 boost::get<nil::crypto3::zk::snark::plonk_copy_constraint<BlueprintFieldType>*>(constraint);
-            std::array<nil::crypto3::zk::snark::plonk_variable<BlueprintFieldType>, 2> vars =
-                {copy_constraint->first, copy_constraint->second};
+            std::array<var, 2> vars = {copy_constraint->first, copy_constraint->second};
             std::array<typename BlueprintFieldType::value_type, 2> values;
             for (std::size_t i = 0; i < 2; i++) {
                 auto row_index = vars[i].rotation;
