@@ -16,6 +16,7 @@ The best way of doing this is via `nix-locate org.gtk.gtk4.Settings.FileChooser.
 Alternatively, run `schema-locator.sh`. If you have multiple versions of gtk4 in the store, use the latest one.
 
 After finding the file, run `glib-compile-schemas --targetdir=. /path/to/schema/directory`.
+Note that you need to pass *directory*, and not the file path.
 This should create `gschemas.compiled` file in current (build) directory.
 
 9. Export the `gschemas.compiled` directory via ` export GSETTINGS_SCHEMA_DIR=/path/to/compiled/schema/dir`.
