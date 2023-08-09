@@ -11,7 +11,7 @@ A simple circuit visualizer for Placeholder proof system.
 7. `make excalibur`
 8. Additionally, you need to compile the GTK schema used in the dialog, and link the environment variable. In order to do that, find you gtk installation in `/nix/store/`.
 
-The best way of doing this is via `nix-locate org.gtk.gtk4.Settings.FileChooser.gschema.xml` if you have `nix-locate` installed.
+The best way of doing this is via `nix-locate org.gtk.gtk4.Settings.FileChooser.gschema.xml` if you have [nix-index](https://github.com/nix-community/nix-index) installed.
 
 Alternatively, run `schema-locator.sh`. If you have multiple versions of gtk4 in the store, use the latest one.
 
