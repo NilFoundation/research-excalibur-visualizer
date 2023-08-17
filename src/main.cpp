@@ -41,13 +41,14 @@ int main(int argc, char* argv[]) {
 
     using vesta_curve_type = nil::crypto3::algebra::curves::vesta::base_field_type;
     using pallas_curve_type = nil::crypto3::algebra::curves::pallas::base_field_type;
+    using bls12_fr_381_curve_type = nil::crypto3::algebra::fields::bls12_fr<381>;
 
     Glib::OptionGroup::vecustrings main_option_vector;
     Glib::OptionGroup main_group("curves", "Curves", "Curve used in the program");
 
     // boolean option
-    bool vesta = false, pallas = false;
-    Glib::OptionEntry vesta_entry, pallas_entry;
+    bool vesta = false, pallas = false, bls12_fr_381 = false;
+    Glib::OptionEntry vesta_entry, pallas_entry, bls12_fr_381_entry;
 
     vesta_entry.set_long_name("vesta");
     vesta_entry.set_short_name('v');
@@ -59,6 +60,11 @@ int main(int argc, char* argv[]) {
     pallas_entry.set_description("Use Pallas curve");
     main_group.add_entry(pallas_entry, pallas);
 
+    bls12_fr_381_entry.set_long_name("bls12_fr_381");
+    bls12_fr_381_entry.set_short_name('b');
+    bls12_fr_381_entry.set_description("Use BLS12_fr_381 curve");
+    main_group.add_entry(bls12_fr_381_entry, bls12_fr_381);
+
     // Add the main group to the context
     Glib::OptionContext context;
     context.set_main_group(main_group);
@@ -66,12 +72,12 @@ int main(int argc, char* argv[]) {
     context.set_ignore_unknown_options(true);
     context.parse(argc, argv);
 
-    if (vesta && pallas) {
+    if (vesta && pallas || vesta && bls12_fr_381 || pallas && bls12_fr_381) {
         std::cerr << "Error: only one curve can be used at a time." << std::endl;
         return 1;
     }
-    if (!vesta && !pallas) {
-        std::cerr << "Error: no curve selected. Use --vesta or --pallas." << std::endl;
+    if (!vesta && !pallas && !bls12_fr_381) {
+        std::cerr << "Error: no curve selected. Use --vesta or --pallas or --bls12_fr_381." << std::endl;
         return 1;
     }
 
@@ -80,5 +86,8 @@ int main(int argc, char* argv[]) {
     }
     if (pallas) {
         return app->make_window_and_run<ExcaliburWindow<pallas_curve_type>>(argc, argv);
+    }
+    if (bls12_fr_381) {
+        return app->make_window_and_run<ExcaliburWindow<bls12_fr_381_curve_type>>(argc, argv);
     }
 }
