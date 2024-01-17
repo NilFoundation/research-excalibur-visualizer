@@ -29,10 +29,9 @@ pkgs.mkShell {
     valgrind
     libsForQt5.kcachegrind
     linuxKernel.packages.linux_zen.perf
-    clang-tools_16
-  ] ++ (with pkgs.llvmPackages_16; [
+    clang-tools
     clang
-  ]);
+  ];
 
   shellHook = ''
     export NO_AT_BRIDGE="1"
