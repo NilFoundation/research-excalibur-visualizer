@@ -238,11 +238,13 @@ struct gate_constraint_parser : boost::spirit::qi::grammar<Iterator,
         function<pow_constructor_impl<BlueprintFieldType>> pow_constructor;
         auto constant = int_parser<typename BlueprintFieldType::integral_type, 10, 1,
                                    (BlueprintFieldType::modulus_bits + 3 - 1) / 3>();
-        variable = (lit("var_") > uint_ > lit("_") > int_
-                                > (lit("_witness_relative")[_val = var(0, 0, true, var::column_type::witness)] |
-                                   lit("_public_input")[_val = var(0, 0, false, var::column_type::public_input)] |
-                                   lit("_constant_relative")[_val = var(0, 0, false, var::column_type::constant)]))
-                                [_val = var_constructor(_1, _2, _val)];
+        variable = ((lit("w")[_val = construct<var>(0, 0, true, var::column_type::witness)] |
+                     lit("pub")[_val = construct<var>(0, 0, false, var::column_type::public_input)] |
+                     lit("c")[_val = construct<var>(0, 0, false, var::column_type::constant)]) >
+                     lit("_") > uint_ > -lit("_abs") >  -(lit("_rot(") > int_ > lit(")")))
+                    [_val = if_else(_2,
+                        var_constructor(_1, *_2, _val),
+                        var_constructor(_1, 0, _val))];
         // This is a bit confusing, as atom has the type of term<var>.
         atom = variable | constant;
         expression = term_[_val = construct<plonk_constraint_type>(_1)]
@@ -301,11 +303,13 @@ struct copy_constraint_parser : boost::spirit::qi::grammar<Iterator,
         function<copy_constraint_constructor<BlueprintFieldType>> copy_constraint_constructor;
         auto constant = int_parser<typename BlueprintFieldType::integral_type, 10, 1,
                                    (BlueprintFieldType::modulus_bits + 3 - 1) / 3>();
-        variable = (lit("var_") > uint_ > lit("_") > uint_
-                                > (lit("_witness")[_val = var(0, 0, false, var::column_type::witness)] |
-                                   lit("_public_input")[_val = var(0, 0, false, var::column_type::public_input)] |
-                                   lit("_constant")[_val = var(0, 0, false, var::column_type::constant)]))
-                                [_val = var_constructor(_1, _2, _val)];
+        variable = ((lit("w")[_val = construct<var>(0, 0, true, var::column_type::witness)] |
+                     lit("pub")[_val = construct<var>(0, 0, false, var::column_type::public_input)] |
+                     lit("c")[_val = construct<var>(0, 0, false, var::column_type::constant)]) >
+                     lit("_") > uint_ > lit("_abs") > -(lit("_rot(") > int_ > lit(")")))
+                    [_val = if_else(_2,
+                        var_constructor(_1, *_2, _val),
+                        var_constructor(_1, 0, _val))];
         start = (variable > variable)[_val = copy_constraint_constructor(_1, _2)];
 
         boost::spirit::qi::on_error<boost::spirit::qi::fail>(
