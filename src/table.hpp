@@ -34,6 +34,7 @@
 #include <utility>
 #include <set>
 #include <map>
+#include <filesystem>
 
 #include <boost/spirit/include/qi.hpp>
 #include <boost/phoenix/phoenix.hpp>
@@ -697,6 +698,7 @@ public:
         auto file_dialog = Gtk::FileDialog::create();
         file_dialog->set_modal(true);
         file_dialog->set_title("Open table file");
+        file_dialog->set_initial_folder(Gio::File::create_for_path(std::string(std::filesystem::current_path())));
         file_dialog->open(*this,
             sigc::bind<0>(sigc::mem_fun(*this,
                                         &ExcaliburWindow::on_table_file_open_dialog_response),
@@ -707,6 +709,7 @@ public:
         auto file_dialog = Gtk::FileDialog::create();
         file_dialog->set_modal(true);
         file_dialog->set_title("Open circuit file");
+        file_dialog->set_initial_folder(Gio::File::create_for_path(std::string(std::filesystem::current_path())));
         file_dialog->open(*this,
             sigc::bind<0>(sigc::mem_fun(*this,
                                         &ExcaliburWindow::on_circuit_file_open_dialog_response),
