@@ -7,7 +7,7 @@ A simple circuit visualizer for Placeholder proof system.
 3. Install [nix](https://nixos.org/download.html).
 4. Run `nix-shell` inside excalibur repository directory.
 5. `mkdir build && cd build`
-6. `cmake ../. -DCMAKE_CXX_STANDARD=17 -DBUILD_SHARED_LIBS=TRUE -DBUILD_TESTS=TRUE -DBUILD_EXAMPLES=TRUE -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER="clang++" -DCMAKE_C_COMPILER="clang" -DCMAKE_CXX_FLAGS="-Wall"`
+6. `cmake ../. -DCMAKE_CXX_STANDARD=17 -DBUILD_SHARED_LIBS=TRUE -DBUILD_TESTS=TRUE -DBUILD_EXAMPLES=TRUE -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER="clang++" -DCMAKE_C_COMPILER="clang" -DCMAKE_CXX_FLAGS="-Wall" -DLLDB_EXPORT_ALL_SYMBOLS=ON`
 7. `make excalibur`
 8. Additionally, you need to compile the GTK schema used in the dialog, and link the environment variable. In order to do that, find you gtk installation in `/nix/store/`.
 
