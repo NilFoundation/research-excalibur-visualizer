@@ -28,8 +28,9 @@ pkgs.mkShell {
     #valgrind
     #libsForQt5.kcachegrind
     #linuxKernel.packages.linux_zen.perf
-    clang-tools
-    clang
+    clang-tools_17
+    clang_17
+    gcc13
   ];
 
   shellHook = ''
@@ -47,6 +48,24 @@ pkgs.mkShell {
     }
     function mtcmp() {
       nil_test_runner math $1
+    }
+    function zmtcmp() {
+      nil_test_runner marshalling/zk $1
+    }
+    function atcmp() {
+      nil_test_runner algebra $1
+    }
+    function htcmp() {
+      nil_test_runner hash $1
+    }
+    function cotcmp() {
+      nil_test_runner container $1
+    }
+    function rtcmp() {
+      nil_test_runner random $1
+    }
+    function mctcmp() {
+      nil_test_runner marshalling/core $1
     }
   '';
 }

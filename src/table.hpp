@@ -434,15 +434,15 @@ struct constraint_object : public Glib::Object {
     }
 
     constraint_object(plonk_constraint_type* constraint_, std::size_t row_, std::size_t selector, std::size_t num) :
-            constraint(constraint_), button(nullptr), loaded(false), row(row_) {
+            constraint(constraint_), loaded(false), row(row_), button(nullptr) {
         std::stringstream ss;
         ss << "cons " << selector << " " << num << ": ";
         ss << *constraint_;
         cached_string = ss.str();
     }
 
-    constraint_object(plonk_copy_constraint_type* constraint_) : constraint(constraint_), button(nullptr),
-                                                                 loaded(false), row(-1) {
+    constraint_object(plonk_copy_constraint_type* constraint_)
+            : constraint(constraint_), loaded(false), row(-1), button(nullptr) {
         std::stringstream ss;
         ss << "copy " << constraint_->first << " " << constraint_->second;
         cached_string = ss.str();
