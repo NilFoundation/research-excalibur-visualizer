@@ -385,18 +385,18 @@ protected:
         }
     }
 private:
-    std::vector<Glib::ustring> string_cache;
-    std::vector<value_type> row;
+    std::size_t row_index;
+    std::vector<CellState> cell_states;
+    std::vector<Gtk::Button*> widgets;
+    std::vector<bool> widget_loaded;
     // Stores all copy constraints which affect the i'th item
     // The size element in pair is for constraint num in container.
     std::vector<std::vector<std::pair<std::size_t, plonk_copy_constraint_type*>>> copy_constraints_cache;
     // Stores all constraints which affect the i'th item, with their selectors and constraint numbers.
     std::vector<std::vector<cached_constraint<BlueprintFieldType>>> constraints_cache;
-    std::size_t row_index;
-    std::vector<CellState> cell_states;
-    std::vector<Gtk::Button*> widgets;
-    std::vector<bool> widget_loaded;
-    // Using the model to traverse for gate constraints is annoying, we use previous/next pointers to make it easier.s
+    std::vector<Glib::ustring> string_cache;
+    std::vector<value_type> row;
+    // Using the model to traverse for gate constraints is annoying, we use previous/next pointers to make it easier.
     row_object *previous, *next;
 };
 
@@ -484,8 +484,8 @@ struct CellTracker {
         tracked_object = nullptr;
     }
 
-    TrackedType* tracked_object;
     std::size_t row, column;
+    TrackedType* tracked_object;
 };
 
 
@@ -499,10 +499,10 @@ public:
     using plonk_gate_type = nil::crypto3::zk::snark::plonk_gate<BlueprintFieldType, plonk_constraint_type>;
     using var = nil::crypto3::zk::snark::plonk_variable<value_type>;
 
-    ExcaliburWindow() : table_view(), element_entry(), vbox_prime(), table_window(), vbox_controls(),
-                        open_table_button("Open Table"), save_table_button("Save"),
-                        open_circuit_button("Open Circuit"), constraints_view(),
-                        constraints_window() {
+    ExcaliburWindow() : table_view(), element_entry(), vbox_prime(), vbox_controls(), table_window(),
+                        open_table_button("Open Table"),  open_circuit_button("Open Circuit"),
+                        save_table_button("Save"),
+                        constraints_view(), constraints_window() {
         set_title("Excalibur Circuit Viewer: pull the bugs from the stone");
         set_resizable(true);
 
@@ -618,8 +618,6 @@ public:
             for (const var &variable : variable_set) {
                 row_object<BlueprintFieldType> *var_row = variable.rotation == -1 ? previous_row :
                                                           variable.rotation == 0 ? curent_row : next_row;
-                std::size_t var_row_idx = variable.rotation == -1 ? row_idx - 1 :
-                                          variable.rotation == 0 ? row_idx : row_idx + 1;
                 auto column = var_row->get_actual_column_index(variable, sizes);
                 evaluation_map[std::make_tuple(variable.index, variable.rotation, variable.type)] =
                     var_row->get_row_item(column);
@@ -895,8 +893,7 @@ public:
         delete[] buffer;
         stream->close();
 
-        std::size_t column_num = 0,
-                    column_size = sizes.witnesses_size + sizes.public_inputs_size +
+        std::size_t column_size = sizes.witnesses_size + sizes.public_inputs_size +
                                   sizes.constants_size + sizes.selectors_size;
 
         auto get_column_name = [](const table_sizes &sizes, std::size_t i) {
@@ -1137,7 +1134,6 @@ public:
         }
         auto list_model = model->get_model();
         std::uint32_t width = wide_export ? (BlueprintFieldType::modulus_bits + 4 - 1) / 4 : 0;
-        std::size_t hex_sizes = sizes.witnesses_size + sizes.public_inputs_size + sizes.constants_size;
         for (std::size_t i = 0; i < sizes.max_size; i++) {
             std::stringstream row_stream;
             row_stream << std::hex << std::setfill('0');
@@ -1186,7 +1182,7 @@ public:
         std::size_t row = mitem->get_row_index();
         auto button = dynamic_cast<Gtk::Button*>(&*list_item->get_child());
 
-        if (selected_cell.row == row && selected_cell.column == column || button == nullptr) {
+        if ((selected_cell.row == row && selected_cell.column == column) || button == nullptr) {
             return;
         }
 
@@ -1310,10 +1306,10 @@ public:
     }
 
 protected:
+    Gtk::ColumnView table_view;
     Gtk::Entry element_entry;
     Gtk::Box vbox_prime, vbox_controls;
     Gtk::ScrolledWindow table_window;
-    Gtk::ColumnView table_view;
     Gtk::Button open_table_button, open_circuit_button, save_table_button;
     Gtk::ListView constraints_view;
     Gtk::ScrolledWindow constraints_window;

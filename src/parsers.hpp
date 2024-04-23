@@ -239,9 +239,9 @@ struct gate_constraint_parser : boost::spirit::qi::grammar<Iterator,
         auto constant = int_parser<typename BlueprintFieldType::integral_type, 10, 1,
                                    (BlueprintFieldType::modulus_bits + 3 - 1) / 3>();
         variable = ((lit("w")[_val = construct<var>(0, 0, true, var::column_type::witness)] |
-                     lit("pub")[_val = construct<var>(0, 0, false, var::column_type::public_input)] |
-                     lit("c")[_val = construct<var>(0, 0, false, var::column_type::constant)]) >
-                     lit("_") > uint_ > -lit("_abs") >  -(lit("_rot(") > int_ > lit(")")))
+                     lit("pub")[_val = construct<var>(0, 0, true, var::column_type::public_input)] |
+                     lit("c")[_val = construct<var>(0, 0, true, var::column_type::constant)]) >
+                     lit("_") > uint_ > -(lit("_rot(") > int_ > lit(")")))
                     [_val = if_else(_2,
                         var_constructor(_1, *_2, _val),
                         var_constructor(_1, 0, _val))];
@@ -303,7 +303,7 @@ struct copy_constraint_parser : boost::spirit::qi::grammar<Iterator,
         function<copy_constraint_constructor<BlueprintFieldType>> copy_constraint_constructor;
         auto constant = int_parser<typename BlueprintFieldType::integral_type, 10, 1,
                                    (BlueprintFieldType::modulus_bits + 3 - 1) / 3>();
-        variable = ((lit("w")[_val = construct<var>(0, 0, true, var::column_type::witness)] |
+        variable = ((lit("w")[_val = construct<var>(0, 0, false, var::column_type::witness)] |
                      lit("pub")[_val = construct<var>(0, 0, false, var::column_type::public_input)] |
                      lit("c")[_val = construct<var>(0, 0, false, var::column_type::constant)]) >
                      lit("_") > uint_ > lit("_abs") > -(lit("_rot(") > int_ > lit(")")))
