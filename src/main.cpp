@@ -34,6 +34,9 @@
 #include <nil/crypto3/algebra/fields/arithmetic_params/pallas.hpp>
 #include <nil/crypto3/algebra/curves/pallas.hpp>
 
+#include <nil/crypto3/algebra/fields/mnt4/base_field.hpp>
+#include <nil/crypto3/algebra/fields/mnt6/base_field.hpp>
+
 #include "table.hpp"
 
 int main(int argc, char* argv[]) {
@@ -43,13 +46,17 @@ int main(int argc, char* argv[]) {
     using pallas_curve_type = nil::crypto3::algebra::curves::pallas::base_field_type;
     using bls12_fr_381_curve_type = nil::crypto3::algebra::fields::bls12_fr<381>;
     using bls12_fq_381_curve_type = nil::crypto3::algebra::fields::bls12_fq<381>;
+    using mnt4_curve_type = nil::crypto3::algebra::fields::mnt4_fq<298>;
+    using mnt6_curve_type = nil::crypto3::algebra::fields::mnt6_fq<298>;
 
     Glib::OptionGroup::vecustrings main_option_vector;
     Glib::OptionGroup main_group("curves", "Curves", "Curve used in the program");
 
     // boolean option
     bool vesta = false, pallas = false, bls12_fr_381 = false, bls12_fq_381 = false;
+    bool mnt4 = false, mnt6 = false;
     Glib::OptionEntry vesta_entry, pallas_entry, bls12_fr_381_entry, bls12_fq_381_entry;
+    Glib::OptionEntry mnt4_entry, mnt6_entry;
 
     vesta_entry.set_long_name("vesta");
     vesta_entry.set_short_name('v');
@@ -71,6 +78,17 @@ int main(int argc, char* argv[]) {
     bls12_fq_381_entry.set_description("Use BLS12_fq_381 curve");
     main_group.add_entry(bls12_fq_381_entry, bls12_fq_381);
 
+    mnt4_entry.set_long_name("mnt4");
+    mnt4_entry.set_short_name('4');
+    mnt4_entry.set_description("Use mnt4 curve");
+    main_group.add_entry(mnt4_entry, mnt4);
+
+    mnt6_entry.set_long_name("mnt6");
+    mnt6_entry.set_short_name('6');
+    mnt6_entry.set_description("Use mnt6 curve");
+    main_group.add_entry(mnt6_entry, mnt6);
+
+
     // Add the main group to the context
     Glib::OptionContext context;
     context.set_main_group(main_group);
@@ -84,9 +102,10 @@ int main(int argc, char* argv[]) {
         std::cerr << "Error: only one curve can be used at a time." << std::endl;
         return 1;
     }
-    if (!vesta && !pallas && !bls12_fr_381 && !bls12_fq_381) {
+    if (!vesta && !pallas && !bls12_fr_381 && !bls12_fq_381 && !mnt4 && !mnt6) {
         std::cerr << "Error: no curve selected. Use --vesta or --pallas or --bls12_fr_381, or --bls12_fq_381"
-                  << std::endl;
+            << "or --mnt4 or --mnt6 "
+            << std::endl;
         return 1;
     }
 
@@ -101,5 +120,11 @@ int main(int argc, char* argv[]) {
     }
     if (bls12_fq_381) {
         return app->make_window_and_run<ExcaliburWindow<bls12_fq_381_curve_type>>(argc, argv);
+    }
+    if (mnt4) {
+        return app->make_window_and_run<ExcaliburWindow<mnt4_curve_type>>(argc, argv);
+    }
+    if (mnt6) {
+        return app->make_window_and_run<ExcaliburWindow<mnt6_curve_type>>(argc, argv);
     }
 }
