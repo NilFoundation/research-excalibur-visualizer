@@ -508,7 +508,7 @@ public:
 
         auto css_provider = Gtk::CssProvider::create();
         Glib::ustring css_style =
-            "* { font: 24px Courier; }"
+            "* { font: 24px Courier; text-shadow: none; box-shadow: none; }"
             "button { margin: 0px; padding: 0px; }"
             "button.selected { background: deepskyblue; }"
             "button.copy_satisfied { background: #58D68D; }"
