@@ -27,6 +27,8 @@
 #include <glibmm/optioncontext.h>
 #include <glibmm/optiongroup.h>
 
+#include <numeric>
+
 #include <nil/crypto3/algebra/fields/vesta/base_field.hpp>
 #include <nil/crypto3/algebra/fields/arithmetic_params/vesta.hpp>
 #include <nil/crypto3/algebra/curves/vesta.hpp>
@@ -36,6 +38,7 @@
 
 #include <nil/crypto3/algebra/fields/mnt4/base_field.hpp>
 #include <nil/crypto3/algebra/fields/mnt6/base_field.hpp>
+#include <nil/crypto3/algebra/fields/arithmetic_params/goldilocks64.hpp>
 
 #include "table.hpp"
 
@@ -48,15 +51,15 @@ int main(int argc, char* argv[]) {
     using bls12_fq_381_curve_type = nil::crypto3::algebra::fields::bls12_fq<381>;
     using mnt4_curve_type = nil::crypto3::algebra::fields::mnt4_fq<298>;
     using mnt6_curve_type = nil::crypto3::algebra::fields::mnt6_fq<298>;
+    using goldilocks64_field_type = nil::crypto3::algebra::fields::goldilocks64;
 
     Glib::OptionGroup::vecustrings main_option_vector;
     Glib::OptionGroup main_group("curves", "Curves", "Curve used in the program");
 
-    // boolean option
-    bool vesta = false, pallas = false, bls12_fr_381 = false, bls12_fq_381 = false;
-    bool mnt4 = false, mnt6 = false;
-    Glib::OptionEntry vesta_entry, pallas_entry, bls12_fr_381_entry, bls12_fq_381_entry;
-    Glib::OptionEntry mnt4_entry, mnt6_entry;
+    bool vesta = false, pallas = false, bls12_fr_381 = false, bls12_fq_381 = false,
+         mnt4 = false, mnt6 = false, goldilocks64 = false;
+    Glib::OptionEntry vesta_entry, pallas_entry, bls12_fr_381_entry, bls12_fq_381_entry,
+                      mnt4_entry, mnt6_entry, goldilocks64_entry;
 
     vesta_entry.set_long_name("vesta");
     vesta_entry.set_short_name('v');
@@ -88,6 +91,10 @@ int main(int argc, char* argv[]) {
     mnt6_entry.set_description("Use mnt6 curve");
     main_group.add_entry(mnt6_entry, mnt6);
 
+    goldilocks64_entry.set_long_name("goldilocks64");
+    goldilocks64_entry.set_short_name('g');
+    goldilocks64_entry.set_description("Use Goldilocks64 curve");
+    main_group.add_entry(goldilocks64_entry, goldilocks64);
 
     // Add the main group to the context
     Glib::OptionContext context;
@@ -95,17 +102,20 @@ int main(int argc, char* argv[]) {
     context.set_help_enabled(true);
     context.set_ignore_unknown_options(true);
     context.parse(argc, argv);
-    // check that only a single curve is selected
-    if ((vesta && pallas) || (vesta && bls12_fr_381) || (vesta && bls12_fq_381) || (pallas && bls12_fr_381) ||
-        (pallas && bls12_fq_381) || (bls12_fr_381 && bls12_fq_381)) {
 
+    // check that only a single curve is selected
+    std::vector<bool> curve_selections = {
+        vesta, pallas, bls12_fr_381, bls12_fq_381,mnt4, mnt6, goldilocks64};
+    uint8_t curve_count = std::accumulate(curve_selections.begin(), curve_selections.end(), 0);
+    if (curve_count > 1) {
         std::cerr << "Error: only one curve can be used at a time." << std::endl;
         return 1;
     }
-    if (!vesta && !pallas && !bls12_fr_381 && !bls12_fq_381 && !mnt4 && !mnt6) {
+    // check that at least one curve is selected
+    if (curve_count == 0) {
         std::cerr << "Error: no curve selected. Use --vesta or --pallas or --bls12_fr_381, or --bls12_fq_381"
-            << "or --mnt4 or --mnt6 "
-            << std::endl;
+                  << " or --mnt4 or --mnt6 or --goldilocks64"
+                  << std::endl;
         return 1;
     }
 
@@ -126,5 +136,8 @@ int main(int argc, char* argv[]) {
     }
     if (mnt6) {
         return app->make_window_and_run<ExcaliburWindow<mnt6_curve_type>>(argc, argv);
+    }
+    if (goldilocks64) {
+        return app->make_window_and_run<ExcaliburWindow<goldilocks64_field_type>>(argc, argv);
     }
 }
