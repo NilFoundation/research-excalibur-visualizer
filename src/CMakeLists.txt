@@ -63,7 +63,6 @@ target_link_directories(${C3_TARGET} PRIVATE ${GTKMM_LIBRARY_DIRS} ${GTK_LIBRARY
 target_link_libraries(${C3_TARGET}
                       crypto3::algebra
                       crypto3::block
-                      crypto3::blueprint
                       crypto3::codec
                       crypto3::containers
                       crypto3::hash
@@ -85,6 +84,7 @@ target_link_libraries(${C3_TARGET}
                       crypto3::stream
                       crypto3::vdf
                       crypto3::zk
+                      #blueprint
                       ${Boost_LIBRARIES}
                       ${GTKMM_LIBRARIES}
                       ${GTK_LIBRARIES}
