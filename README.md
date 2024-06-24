@@ -17,7 +17,7 @@ After finding the file, run `glib-compile-schemas --targetdir=. /path/to/schema/
 Note that you need to pass *directory*, and not the file path.
 This should create `gschemas.compiled` file in current (build) directory.
 
-7. Export the `gschemas.compiled` directory via ` export GSETTINGS_SCHEMA_DIR=/path/to/compiled/schema/dir`.
+7. Export the `gschemas.compiled` directory via `export GSETTINGS_SCHEMA_DIR=/path/to/compiled/schema/dir`.
 8. Run `./src/excalibur --vesta` (or `--pallas`, or some other supported curve).
 
 # FAQ

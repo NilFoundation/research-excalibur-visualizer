@@ -6,26 +6,16 @@
     flake-utils = {
       url = "github:numtide/flake-utils";
     };
-    nix_3rdparty = {
-      url = "github:NilFoundation/nix-3rdparty";
-      inputs = {
-        nixpkgs.follows = "nixpkgs";
-        flake-utils.follows = "flake-utils";
-      };
-    };
     nil_crypto3 = {
       url = "github:NilFoundation/crypto3";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
 
-  outputs = { self, nixpkgs, flake-utils, nil_crypto3, nix_3rdparty, ... }:
+  outputs = { self, nixpkgs, flake-utils, nil_crypto3, ... }:
     (flake-utils.lib.eachDefaultSystem (system:
       let
-        pkgs = import nixpkgs {
-          overlays = [ nix_3rdparty.overlays.${system}.default ];
-          inherit system;
-        };
+        pkgs = import nixpkgs { inherit system; };
         stdenv = pkgs.llvmPackages_17.stdenv;
         crypto3 = nil_crypto3.packages.${system}.default;
       in rec {
@@ -33,7 +23,6 @@
           default = pkgs.mkShell {
             buildInputs = with pkgs; [
               cmake
-              cmake_modules
               pkg-config
               boost
               clang
@@ -50,7 +39,7 @@
 
             shellHook = ''
               export NO_AT_BRIDGE="1"
-              echo "excalibur dev environment activated"
+              echo "Excalibur dev environment activated"
             '';
           };
         };
