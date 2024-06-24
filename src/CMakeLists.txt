@@ -61,33 +61,9 @@ set_target_properties(${C3_TARGET} PROPERTIES
 target_link_directories(${C3_TARGET} PRIVATE ${GTKMM_LIBRARY_DIRS} ${GTK_LIBRARY_DIRS} ${PANGO_LIBRARY_DIRS} ${PANGOMM_LIBRARY_DIRS})
 
 target_link_libraries(${C3_TARGET}
-                      crypto3::algebra
-                      crypto3::block
-                      crypto3::codec
-                      crypto3::containers
-                      crypto3::hash
-                      crypto3::kdf
-                      crypto3::mac
-                      marshalling::core
-                      marshalling::crypto3_algebra
-                      marshalling::crypto3_multiprecision
-                      marshalling::crypto3_zk
-                      crypto3::math
-                      crypto3::modes
-                      crypto3::multiprecision
-                      crypto3::passhash
-                      crypto3::pbkdf
-                      crypto3::threshold
-                      crypto3::pkpad
-                      crypto3::pubkey
-                      crypto3::random
-                      crypto3::stream
-                      crypto3::vdf
-                      crypto3::zk
-                      #blueprint
+                      crypto3::all
                       ${Boost_LIBRARIES}
                       ${GTKMM_LIBRARIES}
                       ${GTK_LIBRARIES}
-                      ${PANGOMM_LIBRARIES})
-                      #${PANGO_LIBRARIES}
-                      #)
+                      ${PANGOMM_LIBRARIES}
+                      ${PANGO_LIBRARIES})

@@ -1,3 +1,0 @@
-[submodule "libs/crypto3"]
-	path = libs/crypto3
-	url = https://github.com/NilFoundation/crypto3.git

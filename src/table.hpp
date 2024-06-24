@@ -300,6 +300,8 @@ public:
             case var::column_type::selector:
                 return variable.index + 1 + sizes.witnesses_size + sizes.public_inputs_size + sizes.constants_size;
                 break;
+            case var::column_type::uninitialized:
+                throw std::runtime_error("Attempted to get actual column index of uninitialized variable");
         }
     }
 
