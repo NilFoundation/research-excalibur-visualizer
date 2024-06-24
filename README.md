@@ -17,9 +17,8 @@ After finding the file, run `glib-compile-schemas --targetdir=. /path/to/schema/
 Note that you need to pass *directory*, and not the file path.
 This should create `gschemas.compiled` file in current (build) directory.
 
-9. Export the `gschemas.compiled` directory via ` export GSETTINGS_SCHEMA_DIR=/path/to/compiled/schema/dir`.
-10. Run `./src/excalibur --vesta` (or `--pallas`).
-11. (Optional) If you are using VSCode for development, you might be interested in installing the [Nix Environment Selector](https://marketplace.visualstudio.com/items?itemName=arrterian.nix-env-selector) extension.
+7. Export the `gschemas.compiled` directory via ` export GSETTINGS_SCHEMA_DIR=/path/to/compiled/schema/dir`.
+8. Run `./src/excalibur --vesta` (or `--pallas`, or some other supported curve).
 
 # FAQ
 I get the following error while running the tool:
